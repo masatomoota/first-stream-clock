@@ -61,6 +61,23 @@ struct Stopwatch {
     since: Option<Instant>,
 }
 
+/// Phase-aligned display seconds: increments only at clock-source flip boundaries.
+/// acc_secs: whole seconds accumulated from previous segments.
+/// e_seg: wall-clock seconds elapsed in the current running segment.
+/// phase: sub-second fraction [0,1) of the active time source.
+fn aligned_display_secs(acc_secs: u64, e_seg: f64, phase: f64) -> u64 {
+    let seg_term = ((e_seg - phase + 0.5).floor() as i64).max(0) as u64;
+    acc_secs + seg_term
+}
+
+/// Format a total-seconds count as HH:MM:SS.
+fn format_hms(total_secs: u64) -> String {
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    format!("{:02}:{:02}:{:02}", h, m, s)
+}
+
 impl Stopwatch {
     fn new() -> Self {
         Self { acc: Duration::ZERO, since: None }
@@ -83,10 +100,10 @@ impl Stopwatch {
         }
     }
 
-    fn stop(&mut self) {
-        if let Some(t) = self.since.take() {
-            self.acc += t.elapsed();
-        }
+    /// Stop and freeze display at exactly display_secs (whole seconds, no visible jump).
+    fn stop_at(&mut self, display_secs: u64) {
+        self.since = None;
+        self.acc = Duration::from_secs(display_secs);
     }
 
     fn reset(&mut self) {
@@ -94,10 +111,10 @@ impl Stopwatch {
         self.acc = Duration::ZERO;
     }
 
-    /// Double-click cycle: running→stop, stopped-with-time→reset, zero→start.
-    fn cycle(&mut self) {
+    /// Double-click cycle: running→stop_at, stopped-with-time→reset, zero→start.
+    fn cycle(&mut self, display_secs: u64) {
         if self.is_running() {
-            self.stop();
+            self.stop_at(display_secs);
         } else if self.acc > Duration::ZERO {
             self.reset();
         } else {
@@ -105,13 +122,62 @@ impl Stopwatch {
         }
     }
 
-    fn format(&self) -> String {
-        let total = self.elapsed();
-        let total_secs = total.as_secs();
-        let h = total_secs / 3600;
-        let m = (total_secs % 3600) / 60;
-        let s = total_secs % 60;
-        format!("{:02}:{:02}:{:02}", h, m, s)
+    /// Phase-aligned display value in whole seconds.
+    /// phase: sub-second fraction [0,1) of the active clock source.
+    fn display_secs(&self, phase: f64) -> u64 {
+        if let Some(t) = self.since {
+            aligned_display_secs(self.acc.as_secs(), t.elapsed().as_secs_f64(), phase)
+        } else {
+            self.acc.as_secs()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::aligned_display_secs;
+
+    #[test]
+    fn aligned_zero_before_first_flip() {
+        // Started when phase was 0, now e_seg=0.3, phase=0.3 → segment term = floor(0.3-0.3+0.5)=0
+        assert_eq!(aligned_display_secs(0, 0.3, 0.3), 0);
+        // e_seg=0.7, phase=0.7 → floor(0.7-0.7+0.5)=0
+        assert_eq!(aligned_display_secs(0, 0.7, 0.7), 0);
+    }
+
+    #[test]
+    fn aligned_increments_at_flip() {
+        // Just after the clock flipped: phase≈0.0, e_seg=0.7 (offset stayed ~0.7)
+        // floor(0.7-0.0+0.5) = floor(1.2) = 1 → D=1
+        assert_eq!(aligned_display_secs(0, 0.7, 0.0), 1);
+    }
+
+    #[test]
+    fn aligned_clamp_negative_segment_term() {
+        // acc=5, e_seg=0.05, phase=0.9 → floor(0.05-0.9+0.5)=floor(-0.35)=-1 → clamped 0 → D=5
+        assert_eq!(aligned_display_secs(5, 0.05, 0.9), 5);
+    }
+
+    #[test]
+    fn aligned_increments_only_at_flip() {
+        // Constant offset (started at flip): e_seg and phase advance together.
+        // D should stay 0 until phase wraps to 0 and e_seg is ~1.0.
+        let offset = 0.0_f64; // started exactly at flip
+        for tick in 0..95_u32 {
+            let t = tick as f64 * 0.01; // 0.00 .. 0.94
+            let e_seg = offset + t;
+            let phase = t;
+            let d = aligned_display_secs(0, e_seg, phase);
+            assert_eq!(d, 0, "expected 0 at e_seg={e_seg:.2} phase={phase:.2}");
+        }
+        // At e_seg=1.0, phase=0.0 (just after flip): should be 1
+        assert_eq!(aligned_display_secs(0, 1.0, 0.0), 1);
+    }
+
+    #[test]
+    fn aligned_accumulator_carries() {
+        // acc=10 already accumulated, segment adds another 2 flips worth
+        assert_eq!(aligned_display_secs(10, 2.3, 0.3), 12);
     }
 }
 
@@ -250,16 +316,20 @@ impl eframe::App for App {
         let sys_jst = jst_now();
         let date_str = sys_jst.format("%Y/%m/%d").to_string();
 
-        // Time row: depends on source
-        let (time_str, time_color, status_str, status_color) = match &self.settings.source {
+        // Time row: depends on source; also yields phase (sub-second fraction [0,1)) for stopwatch alignment.
+        let (time_str, time_color, status_str, status_color, phase) = match &self.settings.source {
             Source::System => {
-                let t = jst_now().format("%H:%M:%S").to_string();
+                let dt = jst_now();
+                let t = dt.format("%H:%M:%S").to_string();
                 let st = "SYS JST".to_string();
-                (t, GREEN_BRIGHT, st, GREEN_DIM)
+                let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
+                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
             }
             Source::Ntp => {
                 let offset = ntp_status.offset.unwrap_or(0.0);
-                let t = jst_now_with_offset(offset).format("%H:%M:%S").to_string();
+                let dt = jst_now_with_offset(offset);
+                let t = dt.format("%H:%M:%S").to_string();
+                let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
                 let st = match ntp_status.offset {
                     Some(off) => {
                         let server = &self.settings.ntp_server;
@@ -272,11 +342,13 @@ impl eframe::App for App {
                         format!("NTP no sync yet: {}", err)
                     }
                 };
-                (t, GREEN_BRIGHT, st, GREEN_DIM)
+                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
             }
             Source::Ptp => {
                 let offset = ptp_status.offset.unwrap_or(0.0);
-                let t = jst_now_with_offset(offset).format("%H:%M:%S").to_string();
+                let dt = jst_now_with_offset(offset);
+                let t = dt.format("%H:%M:%S").to_string();
+                let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
                 let st = match ptp_status.offset {
                     Some(_) => {
                         let master = ptp_status.master.as_deref().unwrap_or("?");
@@ -290,7 +362,7 @@ impl eframe::App for App {
                         format!("PTP {}", err)
                     }
                 };
-                (t, GREEN_BRIGHT, st, GREEN_DIM)
+                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
             }
             Source::Mtc => {
                 // Freewheel MTC timecode
@@ -299,7 +371,7 @@ impl eframe::App for App {
                 let fps_n = mtc_status.fps_n;
                 let port = mtc_status.port.as_deref().unwrap_or("?");
 
-                let (t, tc_color, st, st_color) = match mtc_status.tc {
+                let (t, tc_color, st, st_color, ph) = match mtc_status.tc {
                     Some(tc) => {
                         match age {
                             Some(a) if a < Duration::from_secs(2) => {
@@ -308,22 +380,26 @@ impl eframe::App for App {
                                 let live = tc.advanced_by(extra_frames, fps_n);
                                 let t = live.hmsf();
                                 let st = format!("MTC {} {:.2}fps {}", port, fps_label, live.hmsf());
-                                (t, GREEN_BRIGHT, st, GREEN_DIM)
+                                // Phase = fraction of the current second in the freewheeled timecode
+                                let ph = ((live.f as f64 + (a.as_secs_f64() * fps_label as f64).fract()) / fps_label as f64).clamp(0.0, 0.999);
+                                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
                             }
                             _ => {
-                                // No signal: hold last value
+                                // No signal: hold last value; fall back to system phase
                                 let t = tc.hmsf();
                                 let st = format!("MTC NO SIGNAL (last {})", tc.hmsf());
-                                (t, RED_SIG, st, RED_SIG)
+                                let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
+                                (t, RED_SIG, st, RED_SIG, ph)
                             }
                         }
                     }
                     None => {
                         let err = mtc_status.error.as_deref().unwrap_or("no signal");
-                        ("--:--:--".to_string(), RED_SIG, format!("MTC {}", err), RED_SIG)
+                        let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
+                        ("--:--:--".to_string(), RED_SIG, format!("MTC {}", err), RED_SIG, ph)
                     }
                 };
-                (t, tc_color, st, st_color)
+                (t, tc_color, st, st_color, ph)
             }
             Source::Ltc => {
                 let age = ltc_status.age;
@@ -331,7 +407,7 @@ impl eframe::App for App {
                 let fps_n = ltc_status.fps_n;
                 let device = ltc_status.device.as_deref().unwrap_or("?");
 
-                let (t, tc_color, st, st_color) = match ltc_status.tc {
+                let (t, tc_color, st, st_color, ph) = match ltc_status.tc {
                     Some(tc) => {
                         match age {
                             Some(a) if a < Duration::from_secs(2) => {
@@ -339,26 +415,30 @@ impl eframe::App for App {
                                 let live = tc.advanced_by(extra_frames, fps_n);
                                 let t = live.hmsf();
                                 let st = format!("LTC {} {:.2}fps {}", device, fps_label, live.hmsf());
-                                (t, GREEN_BRIGHT, st, GREEN_DIM)
+                                let ph = ((live.f as f64 + (a.as_secs_f64() * fps_label as f64).fract()) / fps_label as f64).clamp(0.0, 0.999);
+                                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
                             }
                             _ => {
                                 let t = tc.hmsf();
                                 let st = format!("LTC NO SIGNAL (last {})", tc.hmsf());
-                                (t, RED_SIG, st, RED_SIG)
+                                let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
+                                (t, RED_SIG, st, RED_SIG, ph)
                             }
                         }
                     }
                     None => {
                         let err = ltc_status.error.as_deref().unwrap_or("no signal");
-                        ("--:--:--".to_string(), RED_SIG, format!("LTC {}", err), RED_SIG)
+                        let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
+                        ("--:--:--".to_string(), RED_SIG, format!("LTC {}", err), RED_SIG, ph)
                     }
                 };
-                (t, tc_color, st, st_color)
+                (t, tc_color, st, st_color, ph)
             }
         };
 
-        // Stopwatch
-        let sw_str = self.stopwatch.format();
+        // Stopwatch: phase-aligned display (increments only at clock-source second flips)
+        let sw_secs = self.stopwatch.display_secs(phase);
+        let sw_str = format_hms(sw_secs);
         let sw_color = if self.stopwatch.is_running() {
             GREEN_BRIGHT
         } else if self.stopwatch.elapsed() > Duration::ZERO {
@@ -513,7 +593,7 @@ impl eframe::App for App {
                             .sense(Sense::click());
                             let sw_response = ui.add(sw_label);
                             if sw_response.double_clicked() {
-                                self.stopwatch.cycle();
+                                self.stopwatch.cycle(sw_secs);
                             }
                         },
                     );
