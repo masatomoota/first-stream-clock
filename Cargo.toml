@@ -1,0 +1,18 @@
+[package]
+name = "stream-clock"
+version = "0.2.0"
+edition = "2021"
+description = "Black/green JST digital clock overlay with stopwatch, NTP / MTC / LTC time sources"
+license = "MIT"
+
+[dependencies]
+eframe = { version = "0.34", features = ["persistence"] }
+chrono = "0.4"
+midir = "0.11"
+cpal = "0.18"
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

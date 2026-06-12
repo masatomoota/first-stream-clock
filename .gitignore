@@ -2,3 +2,6 @@
 _err.txt
 _out.txt
 *.log
+
+/target
+build_log.txt
