@@ -32,6 +32,10 @@ impl Timecode {
     pub fn hmsf(&self) -> String {
         format!("{:02}:{:02}:{:02}:{:02}", self.h, self.m, self.s, self.f)
     }
+
+    pub fn hms(&self) -> String {
+        format!("{:02}:{:02}:{:02}", self.h, self.m, self.s)
+    }
 }
 
 /// Round a measured rate to the nearest standard SMPTE rate label.
