@@ -3,11 +3,19 @@
 
 # StreamClock
 
-A black-background, green-text **JST digital clock** for streaming overlays.
-A native Rust app (eframe/egui) built for long, unattended runtime, with an
-optional stopwatch and the ability to slave to external time sources.
-**Windows / macOS**, cross-platform (no platform-specific code beyond font and
-system integration). Free and open source (MIT).
+A **digital clock** designed as a streaming overlay for OBS.
+The clock resizes freely and its background ranges from solid black to fully
+transparent, so it overlays cleanly on OBS (or anything else) without getting in the
+way — even on a cramped screen. It also has a stopwatch that's handy during live
+streams. A robust native Rust app built for long, unattended runtime, such as a live
+prompter.
+
+It can slave to external time sources (NTP / PTP / MTC / LTC). Because it locks to
+LTC/MTC, it doubles as a simple timecode reader.
+
+**Windows / macOS** supported.
+
+Free and open source under the MIT license.
 
 > **Editions** — both are **free**:
 > - **Full** (Windows / macOS direct download, Homebrew): System / NTP / PTP / MTC / LTC.
