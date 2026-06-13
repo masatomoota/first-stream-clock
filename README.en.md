@@ -30,6 +30,30 @@ Free and open source under the MIT license.
 
 ---
 
+## Install
+
+### Homebrew (macOS — builds the full edition from source)
+
+```sh
+brew tap masatomoota/stream-clock
+brew install stream-clock
+```
+
+Launch with `stream-clock`. For LTC (audio input), grant microphone access to your terminal.
+
+### Download (macOS / Windows)
+
+From the [latest release](https://github.com/masatomoota/first-stream-clock/releases/latest):
+
+- **macOS** (Apple Silicon + Intel, universal): open the `.dmg` and drag StreamClock to Applications
+- **Windows** (x64): run the `.exe` directly
+
+The downloads are unsigned, so allow them on first launch:
+- macOS: right-click → Open in Finder, or `xattr -dr com.apple.quarantine /Applications/StreamClock.app`
+- Windows: "More info" → "Run anyway" if SmartScreen appears
+
+To build from source, see [Build](#build) below.
+
 ## Display
 
 Up to four stacked rows (top to bottom):

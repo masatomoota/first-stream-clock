@@ -28,6 +28,30 @@ MIT ライセンスのフリー／オープンソースです。
 
 ---
 
+## インストール
+
+### Homebrew（macOS／フル版をソースからビルド）
+
+```sh
+brew tap masatomoota/stream-clock
+brew install stream-clock
+```
+
+`stream-clock` で起動します。LTC（音声入力）を使う場合はターミナルにマイク権限を付与してください。
+
+### ダウンロード（macOS / Windows）
+
+[最新リリース](https://github.com/masatomoota/first-stream-clock/releases/latest) から:
+
+- **macOS**（Apple Silicon + Intel ユニバーサル）: `.dmg` を開き、StreamClock を Applications にドラッグ
+- **Windows**（x64）: `.exe` をそのまま実行
+
+ダウンロード版は未署名のため、初回は次のように許可してください:
+- macOS: Finder で右クリック →「開く」、または `xattr -dr com.apple.quarantine /Applications/StreamClock.app`
+- Windows: SmartScreen が出たら「詳細情報」→「実行」
+
+ソースからビルドする場合は下記「[ビルド](#ビルド)」を参照。
+
 ## 表示
 
 最大4段（上から）:
