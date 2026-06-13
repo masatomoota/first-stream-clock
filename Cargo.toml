@@ -11,6 +11,7 @@ chrono = "0.4"
 midir = "0.11"
 cpal = "0.18"
 serde = { version = "1", features = ["derive"] }
+if-addrs = "0.13"
 
 [profile.release]
 opt-level = 3

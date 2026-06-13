@@ -16,7 +16,7 @@
 //! and leave `status.utc_offset = None` so the UI can show an assumed value.
 
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -70,6 +70,8 @@ pub struct PtpStatus {
 pub struct PtpHandle {
     state: Arc<Mutex<PtpState>>,
     domain: Arc<AtomicU8>,
+    /// Bind interface IP packed as u32 big-endian; 0 = UNSPECIFIED (auto).
+    bind_ip: Arc<AtomicU32>,
 }
 
 impl PtpHandle {
@@ -89,6 +91,16 @@ impl PtpHandle {
     /// Change the PTP domain to listen on.  Takes effect within ~1 s (socket read timeout).
     pub fn set_domain(&self, domain: u8) {
         self.domain.store(domain, Ordering::Relaxed);
+    }
+
+    /// Change the multicast interface. None = OS default (UNSPECIFIED).
+    /// Takes effect within ~1 s (socket read timeout triggers socket rebuild).
+    pub fn set_interface(&self, ip: Option<Ipv4Addr>) {
+        let packed = match ip {
+            Some(a) => u32::from(a),
+            None => 0,
+        };
+        self.bind_ip.store(packed, Ordering::Relaxed);
     }
 }
 
@@ -133,14 +145,16 @@ impl PtpState {
 pub fn spawn(domain: u8) -> PtpHandle {
     let state = Arc::new(Mutex::new(PtpState::new()));
     let domain_atom = Arc::new(AtomicU8::new(domain));
+    let bind_ip_atom = Arc::new(AtomicU32::new(0));
 
     // Thread: event port 319 — Sync messages
     {
         let state = Arc::clone(&state);
         let domain_atom = Arc::clone(&domain_atom);
+        let bind_ip_atom = Arc::clone(&bind_ip_atom);
         std::thread::Builder::new()
             .name("ptp-event".into())
-            .spawn(move || event_thread(state, domain_atom))
+            .spawn(move || event_thread(state, domain_atom, bind_ip_atom))
             .expect("spawn ptp-event thread");
     }
 
@@ -148,13 +162,14 @@ pub fn spawn(domain: u8) -> PtpHandle {
     {
         let state = Arc::clone(&state);
         let domain_atom = Arc::clone(&domain_atom);
+        let bind_ip_atom = Arc::clone(&bind_ip_atom);
         std::thread::Builder::new()
             .name("ptp-general".into())
-            .spawn(move || general_thread(state, domain_atom))
+            .spawn(move || general_thread(state, domain_atom, bind_ip_atom))
             .expect("spawn ptp-general thread");
     }
 
-    PtpHandle { state, domain: domain_atom }
+    PtpHandle { state, domain: domain_atom, bind_ip: bind_ip_atom }
 }
 
 // ── Thread bodies ─────────────────────────────────────────────────────────────
@@ -176,8 +191,13 @@ fn bind_with_retry(port: u16, state: &Arc<Mutex<PtpState>>) -> UdpSocket {
     }
 }
 
-fn setup_socket(sock: &UdpSocket, state: &Arc<Mutex<PtpState>>) {
-    if let Err(e) = sock.join_multicast_v4(&PTP_MULTICAST, &Ipv4Addr::UNSPECIFIED) {
+/// Decode a packed u32 bind_ip value to Ipv4Addr (0 → UNSPECIFIED).
+fn unpack_ip(raw: u32) -> Ipv4Addr {
+    if raw == 0 { Ipv4Addr::UNSPECIFIED } else { Ipv4Addr::from(raw) }
+}
+
+fn setup_socket(sock: &UdpSocket, iface: Ipv4Addr, state: &Arc<Mutex<PtpState>>) {
+    if let Err(e) = sock.join_multicast_v4(&PTP_MULTICAST, &iface) {
         state.lock().unwrap().error = Some(format!("multicast join failed: {e}"));
     }
     if let Err(e) = sock.set_read_timeout(Some(Duration::from_secs(1))) {
@@ -185,12 +205,22 @@ fn setup_socket(sock: &UdpSocket, state: &Arc<Mutex<PtpState>>) {
     }
 }
 
-fn event_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>) {
+fn event_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>, bind_ip_atom: Arc<AtomicU32>) {
+    let mut current_bind_ip = bind_ip_atom.load(Ordering::Relaxed);
     let sock = bind_with_retry(EVENT_PORT, &state);
-    setup_socket(&sock, &state);
+    setup_socket(&sock, unpack_ip(current_bind_ip), &state);
 
     let mut buf = [0u8; 1500];
+    let mut sock = sock; // mutable binding for rebuild
     loop {
+        // Detect interface change → rebuild socket
+        let new_ip = bind_ip_atom.load(Ordering::Relaxed);
+        if new_ip != current_bind_ip {
+            current_bind_ip = new_ip;
+            sock = bind_with_retry(EVENT_PORT, &state);
+            setup_socket(&sock, unpack_ip(current_bind_ip), &state);
+        }
+
         let domain = domain_atom.load(Ordering::Relaxed);
         match sock.recv(&mut buf) {
             Ok(n) => {
@@ -240,23 +270,31 @@ fn event_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>) {
                 }
             }
             Err(ref e) if is_timeout(e) => {
-                // normal — loop to check domain change
+                // normal — loop to check domain/interface change
             }
             Err(e) => {
                 state.lock().unwrap().error = Some(format!("recv error port {EVENT_PORT}: {e}"));
-                // Brief pause before looping so we don't spam
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
     }
 }
 
-fn general_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>) {
-    let sock = bind_with_retry(GENERAL_PORT, &state);
-    setup_socket(&sock, &state);
+fn general_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>, bind_ip_atom: Arc<AtomicU32>) {
+    let mut current_bind_ip = bind_ip_atom.load(Ordering::Relaxed);
+    let mut sock = bind_with_retry(GENERAL_PORT, &state);
+    setup_socket(&sock, unpack_ip(current_bind_ip), &state);
 
     let mut buf = [0u8; 1500];
     loop {
+        // Detect interface change → rebuild socket
+        let new_ip = bind_ip_atom.load(Ordering::Relaxed);
+        if new_ip != current_bind_ip {
+            current_bind_ip = new_ip;
+            sock = bind_with_retry(GENERAL_PORT, &state);
+            setup_socket(&sock, unpack_ip(current_bind_ip), &state);
+        }
+
         let domain = domain_atom.load(Ordering::Relaxed);
         match sock.recv(&mut buf) {
             Ok(n) => {
@@ -305,7 +343,7 @@ fn general_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>) {
                 }
             }
             Err(ref e) if is_timeout(e) => {
-                // normal — loop to check domain change
+                // normal — loop to check domain/interface change
             }
             Err(e) => {
                 state.lock().unwrap().error =
