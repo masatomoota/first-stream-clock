@@ -17,6 +17,8 @@ LTC/MTC, it doubles as a simple timecode reader.
 
 Free and open source under the MIT license.
 
+![StreamClock as a transparent overlay on OBS](assets/screenshot.png)
+
 > **Editions** — both are **free**:
 > - **Full** (Windows / macOS direct download, Homebrew): System / NTP / PTP / MTC / LTC.
 > - **Lite** (macOS App Store, planned): time source limited to **System + NTP** so the
