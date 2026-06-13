@@ -7,7 +7,7 @@ mod ltc;
 mod ptp;
 
 use eframe::egui::{
-    self, CentralPanel, Color32, FontId, Key, Label, Rect, RichText, Sense, Vec2,
+    self, CentralPanel, Color32, FontFamily, FontId, Key, Label, Rect, RichText, Sense, Vec2,
 };
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -33,6 +33,22 @@ fn default_local_fps() -> f32 {
     30.0
 }
 
+fn default_text_color() -> [u8; 3] {
+    [0x00, 0xFF, 0x66]
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+enum FontStyle {
+    Modern,
+    SevenSeg,
+}
+
+impl Default for FontStyle {
+    fn default() -> Self {
+        FontStyle::Modern
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct Settings {
     source: Source,
@@ -46,6 +62,10 @@ struct Settings {
     show_frames: bool,
     #[serde(default = "default_local_fps")]
     local_fps: f32,
+    #[serde(default = "default_text_color")]
+    text_color: [u8; 3],
+    #[serde(default)]
+    font_style: FontStyle,
 }
 
 impl Default for Settings {
@@ -60,6 +80,8 @@ impl Default for Settings {
             ltc_device: None,
             show_frames: false,
             local_fps: 30.0,
+            text_color: default_text_color(),
+            font_style: FontStyle::Modern,
         }
     }
 }
@@ -218,6 +240,20 @@ impl App {
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
             .unwrap_or_default();
 
+        // Register DSEG7 Classic Bold for the 7-segment font style
+        {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "dseg7".to_owned(),
+                egui::FontData::from_static(include_bytes!("../assets/fonts/DSEG7Classic-Bold.ttf")).into(),
+            );
+            fonts.families.insert(
+                FontFamily::Name("dseg7".into()),
+                vec!["dseg7".to_owned(), "Hack".to_owned()],
+            );
+            cc.egui_ctx.set_fonts(fonts);
+        }
+
         let ntp = ntp::spawn(settings.ntp_server.clone());
         let ptp = ptp::spawn(settings.ptp_domain);
 
@@ -268,9 +304,6 @@ fn jst_now() -> chrono::DateTime<chrono::FixedOffset> {
 
 // ── Colors ───────────────────────────────────────────────────────────────────
 
-const GREEN_BRIGHT: Color32 = Color32::from_rgb(0x00, 0xFF, 0x66);
-const GREEN_DARK: Color32 = Color32::from_rgb(0x2E, 0x7D, 0x32);
-const GREEN_DIM: Color32 = Color32::from_rgb(0x1F, 0x7A, 0x3D);
 const AMBER: Color32 = Color32::from_rgb(0xFF, 0xB3, 0x00);
 const RED_SIG: Color32 = Color32::from_rgb(0xFF, 0x55, 0x44);
 
@@ -322,9 +355,28 @@ impl eframe::App for App {
         let mtc_status = self.mtc.status();
         let ltc_status = self.ltc.status();
 
+        // Derive display colors from text_color setting (bright/dim/dark variants)
+        let [tr, tg, tb] = self.settings.text_color;
+        let col_bright = Color32::from_rgb(tr, tg, tb);
+        let col_dim = Color32::from_rgb(
+            (tr as f32 * 0.55) as u8,
+            (tg as f32 * 0.55) as u8,
+            (tb as f32 * 0.55) as u8,
+        );
+        let col_dark = Color32::from_rgb(
+            (tr as f32 * 0.35) as u8,
+            (tg as f32 * 0.35) as u8,
+            (tb as f32 * 0.35) as u8,
+        );
+
         // Date always from system JST
         let sys_jst = jst_now();
-        let date_str = sys_jst.format("%Y/%m/%d").to_string();
+        // In SevenSeg mode use dashes (DSEG7 has no slash glyph)
+        let date_str = if self.settings.font_style == FontStyle::SevenSeg {
+            sys_jst.format("%Y-%m-%d").to_string()
+        } else {
+            sys_jst.format("%Y/%m/%d").to_string()
+        };
 
         // Time row: depends on source; also yields phase (sub-second fraction [0,1)) for stopwatch alignment.
         let (time_str, time_color, status_str, status_color, phase) = match &self.settings.source {
@@ -339,7 +391,7 @@ impl eframe::App for App {
                     dt.format("%H:%M:%S").to_string()
                 };
                 let st = "SYS JST".to_string();
-                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
+                (t, col_bright, st, col_dim, ph)
             }
             Source::Ntp => {
                 let offset = ntp_status.offset.unwrap_or(0.0);
@@ -364,7 +416,7 @@ impl eframe::App for App {
                         format!("NTP no sync yet: {}", err)
                     }
                 };
-                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
+                (t, col_bright, st, col_dim, ph)
             }
             Source::Ptp => {
                 let offset = ptp_status.offset.unwrap_or(0.0);
@@ -390,7 +442,7 @@ impl eframe::App for App {
                         format!("PTP {}", err)
                     }
                 };
-                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
+                (t, col_bright, st, col_dim, ph)
             }
             Source::Mtc => {
                 // Freewheel MTC timecode
@@ -410,7 +462,7 @@ impl eframe::App for App {
                                 let st = format!("MTC {} {:.2}fps {}", port, fps_label, live.hmsf());
                                 // Phase = fraction of the current second in the freewheeled timecode
                                 let ph = ((live.f as f64 + (a.as_secs_f64() * fps_label as f64).fract()) / fps_label as f64).clamp(0.0, 0.999);
-                                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
+                                (t, col_bright, st, col_dim, ph)
                             }
                             _ => {
                                 // No signal: hold last value; fall back to system phase
@@ -444,7 +496,7 @@ impl eframe::App for App {
                                 let t = if self.settings.show_frames { live.hmsf() } else { live.hms() };
                                 let st = format!("LTC {} {:.2}fps {}", device, fps_label, live.hmsf());
                                 let ph = ((live.f as f64 + (a.as_secs_f64() * fps_label as f64).fract()) / fps_label as f64).clamp(0.0, 0.999);
-                                (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
+                                (t, col_bright, st, col_dim, ph)
                             }
                             _ => {
                                 let t = if self.settings.show_frames { tc.hmsf() } else { tc.hms() };
@@ -468,11 +520,11 @@ impl eframe::App for App {
         let sw_secs = self.stopwatch.display_secs(phase);
         let sw_str = format_hms(sw_secs);
         let sw_color = if self.stopwatch.is_running() {
-            GREEN_BRIGHT
+            col_bright
         } else if self.stopwatch.elapsed() > Duration::ZERO {
             AMBER
         } else {
-            GREEN_DARK
+            col_dark
         };
 
         // ── Main panel ──────────────────────────────────────────────────────
@@ -495,11 +547,12 @@ impl eframe::App for App {
                 // Scale factor
                 let s = (avail.x / 480.0).min(avail.y / 320.0);
 
-                // Font sizes
-                let sz_date = 26.0 * s;
+                // Font sizes (SevenSeg glyphs are wider; apply 0.80 factor to fit)
+                let seg_scale = if self.settings.font_style == FontStyle::SevenSeg { 0.80 } else { 1.0 };
+                let sz_date = 26.0 * s * seg_scale;
                 let time_scale = if self.settings.show_frames { 0.72 } else { 1.0 };
-                let sz_time = 92.0 * s * time_scale;
-                let sz_sw = 70.0 * s;
+                let sz_time = 92.0 * s * time_scale * seg_scale;
+                let sz_sw = 70.0 * s * seg_scale;
                 let sz_status = 12.0 * s;
 
                 // Estimate total block height (no exact measure without layout pass,
@@ -574,6 +627,12 @@ impl eframe::App for App {
                     }
                 });
 
+                // Choose font family for date/time/stopwatch rows
+                let clock_family = match self.settings.font_style {
+                    FontStyle::Modern => FontFamily::Monospace,
+                    FontStyle::SevenSeg => FontFamily::Name("dseg7".into()),
+                };
+
                 // ── Clock rows (vertically centered) ──
                 ui.add_space(top_pad);
 
@@ -584,8 +643,8 @@ impl eframe::App for App {
                         |ui| {
                             ui.label(
                                 RichText::new(&date_str)
-                                    .font(FontId::monospace(sz_date))
-                                    .color(GREEN_BRIGHT),
+                                    .font(FontId::new(sz_date, clock_family.clone()))
+                                    .color(col_bright),
                             );
                         },
                     );
@@ -600,7 +659,7 @@ impl eframe::App for App {
                         |ui| {
                             ui.label(
                                 RichText::new(&time_str)
-                                    .font(FontId::monospace(sz_time))
+                                    .font(FontId::new(sz_time, clock_family.clone()))
                                     .color(time_color),
                             );
                         },
@@ -616,7 +675,7 @@ impl eframe::App for App {
                         |ui| {
                             let sw_label = Label::new(
                                 RichText::new(&sw_str)
-                                    .font(FontId::monospace(sz_sw))
+                                    .font(FontId::new(sz_sw, clock_family.clone()))
                                     .color(sw_color),
                             )
                             .sense(Sense::click());
@@ -887,6 +946,37 @@ impl eframe::App for App {
                                 self.settings.local_fps = val;
                             }
                         }
+                    });
+
+                    // Text color picker with presets
+                    ui.horizontal(|ui| {
+                        ui.label("Text color:");
+                        ui.color_edit_button_srgb(&mut self.settings.text_color);
+                        ui.add_space(6.0);
+                        // Preset swatches: Green, White, Amber, Cyan, Red
+                        for (label, preset) in &[
+                            ("G", [0x00_u8, 0xFF, 0x66]),
+                            ("W", [0xF0, 0xF0, 0xF0]),
+                            ("A", [0xFF, 0xB3, 0x00]),
+                            ("C", [0x00, 0xE5, 0xFF]),
+                            ("R", [0xFF, 0x40, 0x40]),
+                        ] {
+                            let fill = Color32::from_rgb(preset[0], preset[1], preset[2]);
+                            if ui.add(
+                                egui::Button::new(*label)
+                                    .fill(fill)
+                                    .min_size(egui::Vec2::splat(18.0)),
+                            ).clicked() {
+                                self.settings.text_color = *preset;
+                            }
+                        }
+                    });
+
+                    // Font style selector
+                    ui.horizontal(|ui| {
+                        ui.label("Font:");
+                        ui.radio_value(&mut self.settings.font_style, FontStyle::Modern, "Modern");
+                        ui.radio_value(&mut self.settings.font_style, FontStyle::SevenSeg, "7-Segment");
                     });
 
                     ui.separator();
