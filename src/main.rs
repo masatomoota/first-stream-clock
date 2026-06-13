@@ -29,6 +29,10 @@ impl Default for Source {
     }
 }
 
+fn default_local_fps() -> f32 {
+    30.0
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct Settings {
     source: Source,
@@ -38,6 +42,10 @@ struct Settings {
     ptp_domain: u8,
     mtc_port: Option<String>,
     ltc_device: Option<String>,
+    #[serde(default)]
+    show_frames: bool,
+    #[serde(default = "default_local_fps")]
+    local_fps: f32,
 }
 
 impl Default for Settings {
@@ -50,6 +58,8 @@ impl Default for Settings {
             ptp_domain: 0,
             mtc_port: None,
             ltc_device: None,
+            show_frames: false,
+            local_fps: 30.0,
         }
     }
 }
@@ -320,16 +330,28 @@ impl eframe::App for App {
         let (time_str, time_color, status_str, status_color, phase) = match &self.settings.source {
             Source::System => {
                 let dt = jst_now();
-                let t = dt.format("%H:%M:%S").to_string();
-                let st = "SYS JST".to_string();
                 let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
+                let t = if self.settings.show_frames {
+                    let fps = self.settings.local_fps;
+                    let ff = ((ph * fps as f64).floor() as u32).min(fps.ceil() as u32 - 1);
+                    format!("{}:{:02}", dt.format("%H:%M:%S"), ff)
+                } else {
+                    dt.format("%H:%M:%S").to_string()
+                };
+                let st = "SYS JST".to_string();
                 (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
             }
             Source::Ntp => {
                 let offset = ntp_status.offset.unwrap_or(0.0);
                 let dt = jst_now_with_offset(offset);
-                let t = dt.format("%H:%M:%S").to_string();
                 let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
+                let t = if self.settings.show_frames {
+                    let fps = self.settings.local_fps;
+                    let ff = ((ph * fps as f64).floor() as u32).min(fps.ceil() as u32 - 1);
+                    format!("{}:{:02}", dt.format("%H:%M:%S"), ff)
+                } else {
+                    dt.format("%H:%M:%S").to_string()
+                };
                 let st = match ntp_status.offset {
                     Some(off) => {
                         let server = &self.settings.ntp_server;
@@ -347,8 +369,14 @@ impl eframe::App for App {
             Source::Ptp => {
                 let offset = ptp_status.offset.unwrap_or(0.0);
                 let dt = jst_now_with_offset(offset);
-                let t = dt.format("%H:%M:%S").to_string();
                 let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
+                let t = if self.settings.show_frames {
+                    let fps = self.settings.local_fps;
+                    let ff = ((ph * fps as f64).floor() as u32).min(fps.ceil() as u32 - 1);
+                    format!("{}:{:02}", dt.format("%H:%M:%S"), ff)
+                } else {
+                    dt.format("%H:%M:%S").to_string()
+                };
                 let st = match ptp_status.offset {
                     Some(_) => {
                         let master = ptp_status.master.as_deref().unwrap_or("?");
@@ -378,7 +406,7 @@ impl eframe::App for App {
                                 // Freewheel: advance by elapsed frames
                                 let extra_frames = (a.as_secs_f64() * fps_label as f64) as u64;
                                 let live = tc.advanced_by(extra_frames, fps_n);
-                                let t = live.hmsf();
+                                let t = if self.settings.show_frames { live.hmsf() } else { live.hms() };
                                 let st = format!("MTC {} {:.2}fps {}", port, fps_label, live.hmsf());
                                 // Phase = fraction of the current second in the freewheeled timecode
                                 let ph = ((live.f as f64 + (a.as_secs_f64() * fps_label as f64).fract()) / fps_label as f64).clamp(0.0, 0.999);
@@ -386,7 +414,7 @@ impl eframe::App for App {
                             }
                             _ => {
                                 // No signal: hold last value; fall back to system phase
-                                let t = tc.hmsf();
+                                let t = if self.settings.show_frames { tc.hmsf() } else { tc.hms() };
                                 let st = format!("MTC NO SIGNAL (last {})", tc.hmsf());
                                 let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
                                 (t, RED_SIG, st, RED_SIG, ph)
@@ -413,13 +441,13 @@ impl eframe::App for App {
                             Some(a) if a < Duration::from_secs(2) => {
                                 let extra_frames = (a.as_secs_f64() * fps_label as f64) as u64;
                                 let live = tc.advanced_by(extra_frames, fps_n);
-                                let t = live.hmsf();
+                                let t = if self.settings.show_frames { live.hmsf() } else { live.hms() };
                                 let st = format!("LTC {} {:.2}fps {}", device, fps_label, live.hmsf());
                                 let ph = ((live.f as f64 + (a.as_secs_f64() * fps_label as f64).fract()) / fps_label as f64).clamp(0.0, 0.999);
                                 (t, GREEN_BRIGHT, st, GREEN_DIM, ph)
                             }
                             _ => {
-                                let t = tc.hmsf();
+                                let t = if self.settings.show_frames { tc.hmsf() } else { tc.hms() };
                                 let st = format!("LTC NO SIGNAL (last {})", tc.hmsf());
                                 let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
                                 (t, RED_SIG, st, RED_SIG, ph)
@@ -469,7 +497,8 @@ impl eframe::App for App {
 
                 // Font sizes
                 let sz_date = 26.0 * s;
-                let sz_time = 92.0 * s;
+                let time_scale = if self.settings.show_frames { 0.72 } else { 1.0 };
+                let sz_time = 92.0 * s * time_scale;
                 let sz_sw = 70.0 * s;
                 let sz_status = 12.0 * s;
 
@@ -668,6 +697,9 @@ impl eframe::App for App {
                 .open(&mut open)
                 .resizable(true)
                 .show(&ctx, |ui| {
+                    // Make all text in this panel readable on dark backgrounds
+                    ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+
                     // Source selection
                     ui.heading("Time Source");
                     ui.horizontal(|ui| {
@@ -826,6 +858,35 @@ impl eframe::App for App {
                             },
                         };
                         ui.label(ltc_summary);
+                    });
+
+                    ui.separator();
+
+                    // Frames display
+                    ui.checkbox(&mut self.settings.show_frames, "Show frames (HH:MM:SS:FF)");
+
+                    // Local frame rate (used for System/NTP/PTP when show_frames is on)
+                    ui.horizontal(|ui| {
+                        ui.label("Local frame rate:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.settings.local_fps)
+                                .speed(0.01)
+                                .range(1.0..=120.0)
+                                .max_decimals(2),
+                        );
+                        for &(label, val) in &[
+                            ("24", 24.0_f32),
+                            ("25", 25.0),
+                            ("29.97", 29.97),
+                            ("30", 30.0),
+                            ("50", 50.0),
+                            ("59.94", 59.94),
+                            ("60", 60.0),
+                        ] {
+                            if ui.small_button(label).clicked() {
+                                self.settings.local_fps = val;
+                            }
+                        }
                     });
 
                     ui.separator();
