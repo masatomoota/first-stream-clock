@@ -10,7 +10,40 @@ use eframe::egui::{
     self, CentralPanel, Color32, FontFamily, FontId, Key, Label, Rect, RichText, Sense, Vec2,
 };
 use serde::{Deserialize, Serialize};
+use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
+
+// ── NIC helpers ──────────────────────────────────────────────────────────────
+
+/// Return (interface_name, IPv4 address) for all non-loopback IPv4 interfaces.
+fn list_nics() -> Vec<(String, Ipv4Addr)> {
+    match if_addrs::get_if_addrs() {
+        Err(_) => Vec::new(),
+        Ok(addrs) => addrs
+            .into_iter()
+            .filter_map(|iface| {
+                if iface.is_loopback() {
+                    return None;
+                }
+                match iface.addr {
+                    if_addrs::IfAddr::V4(ref v4) => Some((iface.name.clone(), v4.ip)),
+                    _ => None,
+                }
+            })
+            .collect(),
+    }
+}
+
+/// Detect the default-route NIC IP using the UDP connect trick (no packets sent).
+fn default_route_ip() -> Option<Ipv4Addr> {
+    use std::net::UdpSocket;
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    match sock.local_addr().ok()? {
+        std::net::SocketAddr::V4(v4) => Some(*v4.ip()),
+        _ => None,
+    }
+}
 
 // ── Settings ────────────────────────────────────────────────────────────────
 
@@ -66,6 +99,15 @@ struct Settings {
     text_color: [u8; 3],
     #[serde(default)]
     font_style: FontStyle,
+    /// Minimize to taskbar on close instead of quitting.
+    #[serde(default)]
+    minimize_on_close: bool,
+    /// Local IPv4 as string for NTP bind; None = auto (default-route NIC).
+    #[serde(default)]
+    ntp_nic: Option<String>,
+    /// Local IPv4 as string for PTP multicast interface; None = auto.
+    #[serde(default)]
+    ptp_nic: Option<String>,
 }
 
 impl Default for Settings {
@@ -82,6 +124,9 @@ impl Default for Settings {
             local_fps: 30.0,
             text_color: default_text_color(),
             font_style: FontStyle::Modern,
+            minimize_on_close: false,
+            ntp_nic: None,
+            ptp_nic: None,
         }
     }
 }
@@ -167,7 +212,7 @@ impl Stopwatch {
 
 #[cfg(test)]
 mod tests {
-    use super::aligned_display_secs;
+    use super::*;
 
     #[test]
     fn aligned_zero_before_first_flip() {
@@ -211,6 +256,28 @@ mod tests {
         // acc=10 already accumulated, segment adds another 2 flips worth
         assert_eq!(aligned_display_secs(10, 2.3, 0.3), 12);
     }
+
+    #[test]
+    fn list_nics_does_not_panic() {
+        // Should return without panic; result may be empty in CI but must not panic.
+        let nics = list_nics();
+        // All returned IPs must be non-loopback IPv4.
+        for (_name, ip) in &nics {
+            assert!(!ip.is_loopback(), "loopback slipped through: {ip}");
+        }
+    }
+
+    #[test]
+    fn default_route_ip_plausible() {
+        // Should return Some on a machine with network; must not panic.
+        let ip = default_route_ip();
+        if let Some(ip) = ip {
+            // Must not be loopback or unspecified
+            assert!(!ip.is_loopback(), "default route is loopback: {ip}");
+            assert!(!ip.is_unspecified(), "default route is unspecified");
+        }
+        // None is acceptable in CI without networking.
+    }
 }
 
 // ── App ─────────────────────────────────────────────────────────────────────
@@ -225,12 +292,23 @@ struct App {
 
     settings_open: bool,
 
+    /// Set true before sending Close from the context-menu "Exit" action
+    /// so the minimize-on-close interception does not intercept it.
+    force_exit: bool,
+
     // transient UI state for settings window
     ntp_server_edit: String,
     mtc_ports: Vec<String>,
     mtc_selected: String,
     ltc_devices: Vec<String>,
     ltc_selected: String,
+
+    // NIC list for NTP/PTP interface selection (cached; refreshed on settings open / Refresh click)
+    nic_list: Vec<(String, Ipv4Addr)>,
+    default_ip: Option<Ipv4Addr>,
+    // Currently-selected display strings for the combos
+    ntp_nic_selected: String,
+    ptp_nic_selected: String,
 }
 
 impl App {
@@ -239,6 +317,9 @@ impl App {
             .storage
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
             .unwrap_or_default();
+
+        // Force dark theme so settings panel is always readable
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
         // Register DSEG7 Classic Bold for the 7-segment font style
         {
@@ -255,7 +336,20 @@ impl App {
         }
 
         let ntp = ntp::spawn(settings.ntp_server.clone());
+        // Apply saved NTP NIC if any
+        if let Some(ref s) = settings.ntp_nic {
+            if let Ok(ip) = s.parse::<Ipv4Addr>() {
+                let _ = ntp.tx.send(ntp::NtpCmd::SetBindIp(Some(ip)));
+            }
+        }
+
         let ptp = ptp::spawn(settings.ptp_domain);
+        // Apply saved PTP NIC if any
+        if let Some(ref s) = settings.ptp_nic {
+            if let Ok(ip) = s.parse::<Ipv4Addr>() {
+                ptp.set_interface(Some(ip));
+            }
+        }
 
         let mut mtc = mtc::MtcReceiver::new();
         if let Some(ref port) = settings.mtc_port {
@@ -270,6 +364,10 @@ impl App {
 
         let ntp_server_edit = settings.ntp_server.clone();
 
+        // Build initial NIC display strings from persisted settings
+        let ntp_nic_selected = settings.ntp_nic.clone().unwrap_or_default();
+        let ptp_nic_selected = settings.ptp_nic.clone().unwrap_or_default();
+
         Self {
             settings,
             stopwatch: Stopwatch::new(),
@@ -278,12 +376,23 @@ impl App {
             mtc,
             ltc,
             settings_open: false,
+            force_exit: false,
             ntp_server_edit,
             mtc_ports: Vec::new(),
             mtc_selected: String::new(),
             ltc_devices: Vec::new(),
             ltc_selected: String::new(),
+            nic_list: Vec::new(),
+            default_ip: None,
+            ntp_nic_selected,
+            ptp_nic_selected,
         }
+    }
+
+    /// Refresh NIC list and default-route IP (call on settings open or Refresh click).
+    fn refresh_nics(&mut self) {
+        self.nic_list = list_nics();
+        self.default_ip = default_route_ip();
     }
 }
 
@@ -321,6 +430,15 @@ impl eframe::App for App {
     // eframe 0.34: `logic` is called before `ui` each frame; handle keyboard
     // input and schedule the next repaint here (no painting allowed).
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ── Minimize-on-close interception ──────────────────────────────────
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if self.settings.minimize_on_close && !self.force_exit {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+            // If force_exit is true, let the close proceed normally.
+        }
+
         // ── Keyboard input ──────────────────────────────────────────────────
         ctx.input(|i| {
             if i.key_pressed(Key::Escape) {
@@ -537,12 +655,27 @@ impl eframe::App for App {
                 // Paint black background with variable alpha
                 let alpha_byte = (self.settings.bg_alpha * 255.0) as u8;
                 let bg_color = Color32::from_black_alpha(alpha_byte);
+                let rect = Rect::from_min_size(ui.min_rect().min, avail);
                 let painter = ui.painter();
-                painter.rect_filled(
-                    Rect::from_min_size(ui.min_rect().min, avail),
-                    0.0,
-                    bg_color,
-                );
+                painter.rect_filled(rect, 0.0, bg_color);
+
+                // Feature D: paint thin border when background is nearly transparent
+                // and the pointer is over the window or a drag is in progress.
+                if self.settings.bg_alpha < 0.05 {
+                    let ptr_in_window = ctx
+                        .pointer_hover_pos()
+                        .map(|p| rect.contains(p))
+                        .unwrap_or(false);
+                    let dragging = ctx.input(|i| i.pointer.any_down());
+                    if ptr_in_window || dragging {
+                        painter.rect_stroke(
+                            rect.shrink(1.0),
+                            0.0,
+                            egui::Stroke::new(1.5, Color32::from_gray(110)),
+                            egui::StrokeKind::Middle,
+                        );
+                    }
+                }
 
                 // Scale factor
                 let s = (avail.x / 480.0).min(avail.y / 320.0);
@@ -623,6 +756,8 @@ impl eframe::App for App {
                     }
                     ui.separator();
                     if ui.button("Exit").clicked() {
+                        // Force-exit: bypass minimize-on-close interception
+                        self.force_exit = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
@@ -743,18 +878,34 @@ impl eframe::App for App {
 
         // ── Settings window ─────────────────────────────────────────────────
         if self.settings_open {
-            // Refresh device/port lists while settings window is open
+            // Refresh device/port lists and NIC list while settings window is first opened.
+            // (Only refresh on the frame it becomes open, or on explicit Refresh click.)
             self.mtc_ports = mtc::MtcReceiver::list_ports();
             self.ltc_devices = {
                 let mut devs = ltc::LtcReceiver::list_devices();
                 devs.insert(0, "(default)".to_string());
                 devs
             };
+            // Refresh NIC list once per frame while settings open (cheap after first call)
+            if self.nic_list.is_empty() {
+                self.refresh_nics();
+            }
+
+            // Build "Auto" label string for NIC combos
+            let auto_label = match self.default_ip {
+                Some(ip) => format!("Auto (default route: {ip})"),
+                None => "Auto (default route: unknown)".to_string(),
+            };
 
             let mut open = self.settings_open;
             egui::Window::new("Settings")
                 .open(&mut open)
                 .resizable(true)
+                // Feature C: explicit near-black frame so panel is readable regardless of OS theme
+                .frame(
+                    egui::Frame::window(&ctx.global_style())
+                        .fill(Color32::from_rgb(18, 18, 18)),
+                )
                 .show(&ctx, |ui| {
                     // Make all text in this panel readable on dark backgrounds
                     ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
@@ -825,6 +976,11 @@ impl eframe::App for App {
                         };
                         ui.label(ptp_summary);
                     });
+
+                    ui.separator();
+
+                    // ── Inputs section ─────────────────────────────────────────────────
+                    ui.heading("Inputs");
 
                     // MTC settings
                     ui.collapsing("MTC (MIDI Timecode)", |ui| {
@@ -919,6 +1075,114 @@ impl eframe::App for App {
                         ui.label(ltc_summary);
                     });
 
+                    // NTP interface combo
+                    ui.horizontal(|ui| {
+                        ui.label("NTP interface:");
+                        let ntp_text = if self.ntp_nic_selected.is_empty() {
+                            auto_label.clone()
+                        } else {
+                            // Try to find a matching NIC name to show
+                            self.nic_list
+                                .iter()
+                                .find(|(_, ip)| ip.to_string() == self.ntp_nic_selected)
+                                .map(|(name, ip)| format!("{name} ({ip})"))
+                                .unwrap_or_else(|| self.ntp_nic_selected.clone())
+                        };
+                        let mut ntp_changed = false;
+                        egui::ComboBox::from_id_salt("ntp_nic_combo")
+                            .selected_text(&ntp_text)
+                            .show_ui(ui, |ui| {
+                                // Auto option
+                                if ui.selectable_value(
+                                    &mut self.ntp_nic_selected,
+                                    String::new(),
+                                    &auto_label,
+                                ).clicked() {
+                                    ntp_changed = true;
+                                }
+                                for (name, ip) in &self.nic_list.clone() {
+                                    let label = format!("{name} ({ip})");
+                                    let ip_str = ip.to_string();
+                                    if ui.selectable_value(
+                                        &mut self.ntp_nic_selected,
+                                        ip_str,
+                                        &label,
+                                    ).clicked() {
+                                        ntp_changed = true;
+                                    }
+                                }
+                            });
+                        if ntp_changed {
+                            let bind_ip = if self.ntp_nic_selected.is_empty() {
+                                None
+                            } else {
+                                self.ntp_nic_selected.parse::<Ipv4Addr>().ok()
+                            };
+                            self.settings.ntp_nic = if self.ntp_nic_selected.is_empty() {
+                                None
+                            } else {
+                                Some(self.ntp_nic_selected.clone())
+                            };
+                            let _ = self.ntp.tx.send(ntp::NtpCmd::SetBindIp(bind_ip));
+                            let _ = self.ntp.tx.send(ntp::NtpCmd::SyncNow);
+                        }
+                    });
+
+                    // PTP interface combo
+                    ui.horizontal(|ui| {
+                        ui.label("PTP interface:");
+                        let ptp_text = if self.ptp_nic_selected.is_empty() {
+                            auto_label.clone()
+                        } else {
+                            self.nic_list
+                                .iter()
+                                .find(|(_, ip)| ip.to_string() == self.ptp_nic_selected)
+                                .map(|(name, ip)| format!("{name} ({ip})"))
+                                .unwrap_or_else(|| self.ptp_nic_selected.clone())
+                        };
+                        let mut ptp_changed = false;
+                        egui::ComboBox::from_id_salt("ptp_nic_combo")
+                            .selected_text(&ptp_text)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_value(
+                                    &mut self.ptp_nic_selected,
+                                    String::new(),
+                                    &auto_label,
+                                ).clicked() {
+                                    ptp_changed = true;
+                                }
+                                for (name, ip) in &self.nic_list.clone() {
+                                    let label = format!("{name} ({ip})");
+                                    let ip_str = ip.to_string();
+                                    if ui.selectable_value(
+                                        &mut self.ptp_nic_selected,
+                                        ip_str,
+                                        &label,
+                                    ).clicked() {
+                                        ptp_changed = true;
+                                    }
+                                }
+                            });
+                        if ptp_changed {
+                            let bind_ip = if self.ptp_nic_selected.is_empty() {
+                                None
+                            } else {
+                                self.ptp_nic_selected.parse::<Ipv4Addr>().ok()
+                            };
+                            self.settings.ptp_nic = if self.ptp_nic_selected.is_empty() {
+                                None
+                            } else {
+                                Some(self.ptp_nic_selected.clone())
+                            };
+                            self.ptp.set_interface(bind_ip);
+                        }
+                    });
+
+                    // Refresh NIC list button
+                    if ui.button("Refresh NIC list").clicked() {
+                        self.refresh_nics();
+                    }
+
                     ui.separator();
 
                     // Frames display
@@ -1002,8 +1266,17 @@ impl eframe::App for App {
                         };
                         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
                     }
+
+                    // Feature A: minimize-on-close checkbox
+                    ui.checkbox(
+                        &mut self.settings.minimize_on_close,
+                        "Minimize to taskbar on close (don't exit)",
+                    );
                 });
             self.settings_open = open;
+        } else {
+            // Clear NIC list when settings closed so it refreshes on next open
+            self.nic_list.clear();
         }
     }
 }

@@ -21,6 +21,9 @@ pub struct NtpStatus {
 pub enum NtpCmd {
     SetServer(String),
     SyncNow,
+    /// Change the local interface to bind for outgoing NTP queries.
+    /// None = let OS pick (0.0.0.0 = default-route NIC).
+    SetBindIp(Option<std::net::Ipv4Addr>),
 }
 
 pub struct NtpHandle {
@@ -61,8 +64,9 @@ pub fn spawn(initial_server: String) -> NtpHandle {
         .name("ntp-sync".into())
         .spawn(move || {
             let mut server = initial_server;
+            let mut bind_ip: Option<std::net::Ipv4Addr> = None;
             loop {
-                match query(&server) {
+                match query(&server, bind_ip) {
                     Ok((offset, delay)) => {
                         let mut s = status_bg.lock().unwrap();
                         s.offset = Some(offset);
@@ -78,6 +82,7 @@ pub fn spawn(initial_server: String) -> NtpHandle {
                 match rx.recv_timeout(SYNC_INTERVAL) {
                     Ok(NtpCmd::SetServer(srv)) => server = srv,
                     Ok(NtpCmd::SyncNow) => {}
+                    Ok(NtpCmd::SetBindIp(ip)) => bind_ip = ip,
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
@@ -102,8 +107,13 @@ fn ntp_ts_to_unix(buf: &[u8]) -> f64 {
 }
 
 /// Returns (clock offset seconds, round-trip delay seconds).
-fn query(server: &str) -> Result<(f64, f64), String> {
-    let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
+/// bind_ip: local IPv4 to bind; None → 0.0.0.0 (OS default-route NIC).
+fn query(server: &str, bind_ip: Option<std::net::Ipv4Addr>) -> Result<(f64, f64), String> {
+    let local = std::net::SocketAddrV4::new(
+        bind_ip.unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
+        0,
+    );
+    let sock = UdpSocket::bind(local).map_err(|e| e.to_string())?;
     sock.set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|e| e.to_string())?;
     let addr = if server.contains(':') {
@@ -152,5 +162,13 @@ mod tests {
         // half-second fraction
         let buf = [0x83, 0xAA, 0x7E, 0x80, 0x80, 0, 0, 0];
         assert!((ntp_ts_to_unix(&buf) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn query_with_bind_ip_none_does_not_panic() {
+        // Confirm query() constructs the socket without panic (network may be unavailable).
+        let result = query("240.0.0.1:123", None); // unreachable host, quick timeout
+        // We only check it doesn't panic — error is expected.
+        let _ = result;
     }
 }
