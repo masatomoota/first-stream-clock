@@ -71,6 +71,50 @@ show_frames / local_fps / text_color / font_style / minimize_on_close / ntp_nic 
 - コミットは日本語本文+英語サブジェクト、`Co-Authored-By: Claude <model> <noreply@anthropic.com>`
 - push先: origin/main (https://github.com/masatomoota/win-stream-clock.git, gh CLI認証済み)
 
+## 配布・販売オプション（検討済み）
+
+### Homebrew formula（無料・推奨）
+
+技術者・プロ向けのフル機能版配布に最適。署名・公証不要・費用$0。
+
+```ruby
+# masatomoota/homebrew-stream-clock リポジトリを作成して配置
+class StreamClock < Formula
+  url "https://github.com/masatomoota/win-stream-clock/archive/refs/tags/v0.2.0.tar.gz"
+  depends_on "rust" => :build
+  def install
+    system "cargo", "install", "--root", prefix, "--path", "."
+  end
+end
+```
+
+ユーザー操作: `brew tap masatomoota/stream-clock && brew install stream-clock`
+
+### DMG直配布（署名なし）
+
+署名・公証なしでも動く。ただしダウンロード後に Gatekeeper がブロックするため、
+README に以下を案内すること:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/StreamClock.app
+# または Finder で右クリック→「開く」
+```
+
+### Mac App Store版（検討中）
+
+- 費用: $99/年（Apple Developer Program）+ 売上の15〜30%手数料
+- **Sandbox制約**: MTC/LTC/PTP は対応困難。NTP + System のみに限定すれば通過可能
+- NTP-only版として一般配信者向けに有料（¥250〜¥600程度）で出す戦略はあり
+- フル機能版（brew）と2本立てで市場を分けることを想定
+
+### iOS/iPad版（将来検討）
+
+- eframe 0.34 は **iOS 未対応**。GUI層を SwiftUI で書き直す必要あり
+- Rust の NTP/ロジック部分は C FFI 経由で再利用可能
+- iPadOS 16以降をターゲットにすれば 2019年以降のiPad（mini 5+, Air 3+）をカバー
+- 配信用途ではiPad版はニーズあり、iPhone版は画面サイズ的に優先度低
+- Mac App Store版が軌道に乗ってから検討する想定
+
 ## 未検証・既知の課題
 
 - [ ] MTC/LTC/PTP の実信号での動作検証（手元に発生源がなく未実施）
