@@ -1,0 +1,34 @@
+[package]
+name = "stream-clock"
+version = "0.2.0"
+edition = "2021"
+description = "Black/green JST digital clock overlay with stopwatch, NTP / MTC / LTC time sources"
+license = "MIT"
+
+[features]
+default = ["full-sources"]
+full-sources = ["dep:midir", "dep:cpal"]
+
+[dependencies]
+eframe = { version = "0.34", features = ["persistence"] }
+chrono = "0.4"
+midir = { version = "0.11", optional = true }
+cpal = { version = "0.18", optional = true }
+serde = { version = "1", features = ["derive"] }
+if-addrs = "0.13"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+
+# macOS .app bundling (cargo-bundle). Used for the Mac App Store build, which MUST be
+# built with `--no-default-features` (NTP + System only; PTP/MTC/LTC cannot pass the sandbox).
+# Full build/signing/.pkg flow: see first-stream-clock-mobile/HANDOFF-APPSTORE.md §6.
+[package.metadata.bundle]
+name = "StreamClock"
+identifier = "net.firstcallmusic.streamclock"
+category = "public.app-category.utilities"
+short_description = "JST clock overlay with NTP sync and stopwatch"
+icon = ["assets/icon/AppIcon.icns"]
+osx_minimum_system_version = "11.0"
