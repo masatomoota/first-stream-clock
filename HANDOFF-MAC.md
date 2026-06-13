@@ -60,13 +60,56 @@ Apple Silicon なら `aarch64-apple-darwin`（rustupが自動選択）。Intel M
    （8.8.8.8:80へconnect→local_addr、送信なし）。macでは en0 等が返るはず。
    設定画面の「Auto (default route: x.x.x.x)」表示が実際のプライマリNICと一致するか確認。
 
-## 配布用 .app バンドル化（任意・動作確認後でよい）
+## 配布方法の選択肢（検討済み）
 
-素のバイナリはFinderダブルクリックで起動できない（ターミナルからは可）。配布するなら:
-- `cargo install cargo-bundle` → `Cargo.toml` に `[package.metadata.bundle]` を追記して `cargo bundle --release`
-- または手動で `StreamClock.app/Contents/{MacOS,Info.plist}` を構成
-- **Info.plist に必ず `NSMicrophoneUsageDescription` を入れる**（LTC用）
-- 他マシンへ配るならGatekeeper対策（`xattr -dr com.apple.quarantine` 案内 or codesign/notarize）
+### 1. Homebrew formula（無料・フル機能版推奨）
+
+署名・公証不要。技術者・プロ向けに最適。`masatomoota/homebrew-stream-clock` tap を作成:
+
+```ruby
+class StreamClock < Formula
+  url "https://github.com/masatomoota/win-stream-clock/archive/refs/tags/v0.2.0.tar.gz"
+  depends_on "rust" => :build
+  def install
+    system "cargo", "install", "--root", prefix, "--path", "."
+  end
+end
+```
+
+ユーザー: `brew tap masatomoota/stream-clock && brew install stream-clock`
+
+### 2. DMG直配布（署名なし）
+
+`.app` バンドルを作成して DMG に詰める場合:
+
+```sh
+cargo install cargo-bundle
+# Cargo.toml に [package.metadata.bundle] を追記後:
+cargo bundle --release
+```
+
+Info.plist に **`NSMicrophoneUsageDescription`** が必須（LTC用オーディオ入力）。  
+署名・公証なしでも動くが Gatekeeper がブロックするため README に案内:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/StreamClock.app
+# または Finder で右クリック→「開く」
+```
+
+### 3. Mac App Store版（一般配信者向け・検討中）
+
+- 費用: $99/年 + 売上の15〜30%（Apple Developer Program）
+- **Sandbox制約**: MTC/LTC/PTP は対応困難。**NTP + System 限定**なら Sandbox を通過可能
+- `com.apple.security.network.client` entitlement で outbound UDP（port 123）は許可される
+- 一般配信者向けシンプル版として有料（¥250〜¥600程度）で出す戦略を検討中
+- フル機能版（brew）と2本立てで市場を分ける想定
+
+### 4. iOS/iPad版（将来検討）
+
+- eframe 0.34 は **iOS 未対応**。GUI 層を SwiftUI で書き直す必要あり
+- Rust の NTP ロジックは C FFI 経由で再利用可能（`cbindgen` 等）
+- **iPadOS 16以降**をターゲット → 2019年以降の iPad（mini 5+, Air 3+, Pro）をカバー
+- Mac App Store 版が軌道に乗ってから検討する想定
 
 ## 検証チェックリスト（実機で順に）
 
