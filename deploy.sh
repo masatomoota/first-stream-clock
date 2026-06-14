@@ -44,12 +44,12 @@ build_variant() {
   local label="$1"; shift
   local extra=("$@")
   local out="$DIST/$label"
-  log "[$label] cargo build --release ${extra[*]} ($ARM)"
-  cargo build --release --target "$ARM" "${extra[@]}" >>"$LOG" 2>&1
-  log "[$label] cargo build --release ${extra[*]} ($X86)"
-  cargo build --release --target "$X86" "${extra[@]}" >>"$LOG" 2>&1
-  log "[$label] cargo bundle --release ${extra[*]} ($ARM)"
-  cargo bundle --release --target "$ARM" "${extra[@]}" >>"$LOG" 2>&1
+  log "[$label] cargo build --release ${extra[*]:-} ($ARM)"
+  cargo build --release --target "$ARM" ${extra[@]+"${extra[@]}"} >>"$LOG" 2>&1
+  log "[$label] cargo build --release ${extra[*]:-} ($X86)"
+  cargo build --release --target "$X86" ${extra[@]+"${extra[@]}"} >>"$LOG" 2>&1
+  log "[$label] cargo bundle --release ${extra[*]:-} ($ARM)"
+  cargo bundle --release --target "$ARM" ${extra[@]+"${extra[@]}"} >>"$LOG" 2>&1
 
   local src; src="$(ls -d "$ROOT/target/$ARM/release/bundle/osx/"*.app 2>/dev/null | head -1)"
   [ -n "$src" ] && [ -d "$src" ] || { echo "ERROR: [$label] bundle .app not found under target/$ARM/release/bundle/osx/"; exit 1; }
