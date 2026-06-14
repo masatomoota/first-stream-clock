@@ -7,13 +7,15 @@ license = "MIT"
 
 [features]
 default = ["full-sources"]
-full-sources = ["dep:midir", "dep:cpal"]
+full-sources = ["dep:midir", "dep:cpal", "dep:rosc", "dep:mdns-sd"]
 
 [dependencies]
 eframe = { version = "0.34", features = ["persistence"] }
 chrono = "0.4"
 midir = { version = "0.11", optional = true }
 cpal = { version = "0.18", optional = true }
+rosc = { version = "0.11", optional = true }
+mdns-sd = { version = "0.20", optional = true }
 serde = { version = "1", features = ["derive"] }
 if-addrs = "0.13"
 

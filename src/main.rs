@@ -8,6 +8,8 @@ mod mtc;
 mod ltc;
 #[cfg(feature = "full-sources")]
 mod ptp;
+#[cfg(feature = "full-sources")]
+mod osc;
 
 use eframe::egui::{
     self, CentralPanel, Color32, FontFamily, FontId, Key, Label, Rect, RichText, Sense, Vec2,
@@ -89,6 +91,7 @@ enum Source {
     Ptp,
     Mtc,
     Ltc,
+    Osc,
 }
 
 impl Default for Source {
@@ -164,6 +167,9 @@ struct Settings {
     /// Local IPv4 as string for PTP multicast interface; None = auto.
     #[serde(default)]
     ptp_nic: Option<String>,
+    /// mDNS instance name for the OSC receiver. None = hostname.
+    #[serde(default)]
+    osc_instance_name: Option<String>,
 }
 
 impl Default for Settings {
@@ -187,6 +193,7 @@ impl Default for Settings {
             minimize_on_close: false,
             ntp_nic: None,
             ptp_nic: None,
+            osc_instance_name: None,
         }
     }
 }
@@ -352,6 +359,8 @@ struct App {
     mtc: mtc::MtcReceiver,
     #[cfg(feature = "full-sources")]
     ltc: ltc::LtcReceiver,
+    #[cfg(feature = "full-sources")]
+    osc: Option<osc::OscReceiver>,
 
     settings_open: bool,
 
@@ -448,6 +457,10 @@ impl App {
             let _ = ltc.connect(device_arg);
         }
 
+        // OSC receiver: always start so mDNS is advertised immediately.
+        #[cfg(feature = "full-sources")]
+        let osc = osc::OscReceiver::new(settings.osc_instance_name.clone()).ok();
+
         let ntp_server_edit = settings.ntp_server.clone();
 
         // Build initial NIC display strings from persisted settings
@@ -465,6 +478,8 @@ impl App {
             mtc,
             #[cfg(feature = "full-sources")]
             ltc,
+            #[cfg(feature = "full-sources")]
+            osc,
             settings_open: false,
             force_exit: false,
             ntp_server_edit,
@@ -570,6 +585,8 @@ impl eframe::App for App {
         let mtc_status = self.mtc.status();
         #[cfg(feature = "full-sources")]
         let ltc_status = self.ltc.status();
+        #[cfg(feature = "full-sources")]
+        let osc_status = self.osc.as_ref().map(|r| r.status());
 
         // Derive display colors from text_color setting (bright/dim/dark variants)
         let [tr, tg, tb] = self.settings.text_color;
@@ -733,9 +750,70 @@ impl eframe::App for App {
                 };
                 (t, tc_color, st, st_color, ph)
             }
+            #[cfg(feature = "full-sources")]
+            Source::Osc => {
+                // Display values received from the DAW bridge (spec §0: receive & display only).
+                let col_grey = Color32::from_gray(120);
+                match &osc_status {
+                    Some(st) if st.connected => {
+                        let pos = st.pos.as_ref().unwrap(); // connected implies Some
+                        // Timecode row (primary large display)
+                        let t = format!(
+                            "{:02}:{:02}:{:02}:{:02}",
+                            pos.tc_hh, pos.tc_mm, pos.tc_ss, pos.tc_ff
+                        );
+                        // Status row: bar·beat, BPM, time sig, source name
+                        let source_name = if st.meta.source_name.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{}]", st.meta.source_name)
+                        };
+                        let play_sym = if pos.playing { "▶" } else { "■" };
+                        let st_str = format!(
+                            "OSC {}  BAR {:3} . {:2}  {:.1}BPM  {}/{}  :{:02}{}",
+                            play_sym,
+                            pos.bar,
+                            pos.beat,
+                            pos.bpm,
+                            pos.ts_num,
+                            pos.ts_den,
+                            pos.tc_ff,
+                            source_name,
+                        );
+                        // Sub-second phase from timecode (ff / fps)
+                        let fps = if pos.fps > 0.0 { pos.fps } else { 30.0 };
+                        let ph = (pos.tc_ff as f64 / fps as f64).clamp(0.0, 0.999);
+                        (t, col_bright, st_str, col_dim, ph)
+                    }
+                    Some(st) => {
+                        // Not connected but receiver exists
+                        let port = st.port;
+                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
+                            .timestamp_subsec_micros() as f64 * 1e-6;
+                        (
+                            "--:--:--:--".to_string(),
+                            col_grey,
+                            format!("OSC waiting… (port {})", port),
+                            col_grey,
+                            ph,
+                        )
+                    }
+                    None => {
+                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
+                            .timestamp_subsec_micros() as f64 * 1e-6;
+                        (
+                            "--:--:--:--".to_string(),
+                            col_grey,
+                            "OSC unavailable".to_string(),
+                            col_grey,
+                            ph,
+                        )
+                    }
+                }
+            }
             #[cfg(not(feature = "full-sources"))]
             _ => {
-                // Ptp/Mtc/Ltc not available in this build; treat as System
+                // Ptp/Mtc/Ltc/Osc not available in this build; treat as System
                 let dt = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0);
                 let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
                 let t = if self.settings.show_frames {
@@ -862,6 +940,11 @@ impl eframe::App for App {
                     #[cfg(feature = "full-sources")]
                     if ui.radio(self.settings.source == Source::Ltc, "LTC").clicked() {
                         self.settings.source = Source::Ltc;
+                        ui.close();
+                    }
+                    #[cfg(feature = "full-sources")]
+                    if ui.radio(self.settings.source == Source::Osc, "OSC").clicked() {
+                        self.settings.source = Source::Osc;
                         ui.close();
                     }
                     ui.separator();
@@ -1119,6 +1202,8 @@ impl eframe::App for App {
                         ui.radio_value(&mut self.settings.source, Source::Mtc, "MTC");
                         #[cfg(feature = "full-sources")]
                         ui.radio_value(&mut self.settings.source, Source::Ltc, "LTC");
+                        #[cfg(feature = "full-sources")]
+                        ui.radio_value(&mut self.settings.source, Source::Osc, "OSC");
                     });
 
                     ui.separator();
@@ -1278,6 +1363,40 @@ impl eframe::App for App {
                             },
                         };
                         ui.label(ltc_summary);
+                    });
+
+                    // OSC settings
+                    #[cfg(feature = "full-sources")]
+                    ui.collapsing("OSC (StreamClock bridge)", |ui| {
+                        ui.label("Receives /sc/pos from the DAW bridge plugin over UDP.");
+                        if let Some(ref osc_st) = osc_status {
+                            ui.label(format!("UDP listen port: {}", osc_st.port));
+                            if osc_st.connected {
+                                if let Some(ref pos) = osc_st.pos {
+                                    ui.label(format!(
+                                        "Connected  BAR {} . {}  {:.1}BPM  TC {:02}:{:02}:{:02}:{:02}",
+                                        pos.bar, pos.beat, pos.bpm,
+                                        pos.tc_hh, pos.tc_mm, pos.tc_ss, pos.tc_ff
+                                    ));
+                                }
+                            } else {
+                                ui.label("Waiting for /sc/pos…");
+                            }
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("mDNS name:");
+                            let mut name_edit = self.settings.osc_instance_name
+                                .clone()
+                                .unwrap_or_default();
+                            if ui.text_edit_singleline(&mut name_edit).changed() {
+                                self.settings.osc_instance_name = if name_edit.is_empty() {
+                                    None
+                                } else {
+                                    Some(name_edit)
+                                };
+                            }
+                            ui.label("(empty = hostname)");
+                        });
                     });
 
                     // NTP interface combo
