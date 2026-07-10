@@ -1,15 +1,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod tc;
-mod ntp;
-#[cfg(feature = "full-sources")]
-mod mtc;
 #[cfg(feature = "full-sources")]
 mod ltc;
-#[cfg(feature = "full-sources")]
-mod ptp;
+#[cfg(feature = "tc-out")]
+mod ltc_out;
+#[cfg(any(feature = "full-sources", all(test, feature = "tc-out")))]
+mod mtc;
+#[cfg(feature = "tc-out")]
+mod mtc_out;
+mod ntp;
 #[cfg(feature = "full-sources")]
 mod osc;
+#[cfg(feature = "full-sources")]
+mod ptp;
+mod tc;
 
 use eframe::egui::{
     self, CentralPanel, Color32, FontFamily, FontId, Key, Label, Rect, RichText, Sense, Vec2,
@@ -17,6 +21,7 @@ use eframe::egui::{
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
+use tc::TcRate;
 
 // ── NIC helpers ──────────────────────────────────────────────────────────────
 
@@ -40,9 +45,11 @@ fn list_nics() -> Vec<(String, Ipv4Addr)> {
 }
 
 /// Detect the default-route NIC IP using the UDP connect trick (no packets sent).
+///
+/// Must not `bind()`: the App Sandbox denies it (see `ntp::unbound_udp_v4`), which would
+/// make this return `None` and blank the NIC combo in the Mac App Store build.
 fn default_route_ip() -> Option<Ipv4Addr> {
-    use std::net::UdpSocket;
-    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    let sock = ntp::unbound_udp_v4(None).ok()?;
     sock.connect("8.8.8.8:80").ok()?;
     match sock.local_addr().ok()? {
         std::net::SocketAddr::V4(v4) => Some(*v4.ip()),
@@ -112,6 +119,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_ltc_out_level_db() -> f32 {
+    -12.0
+}
+
 /// Default display time zone in minutes east of UTC. 540 = JST (UTC+9).
 fn default_tz_offset_minutes() -> i32 {
     540
@@ -170,6 +181,18 @@ struct Settings {
     /// mDNS instance name for the OSC receiver. None = hostname.
     #[serde(default)]
     osc_instance_name: Option<String>,
+    #[serde(default)]
+    ltc_out_enabled: bool,
+    #[serde(default)]
+    ltc_out_device: Option<String>,
+    #[serde(default = "default_ltc_out_level_db")]
+    ltc_out_level_db: f32,
+    #[serde(default)]
+    mtc_out_enabled: bool,
+    #[serde(default)]
+    mtc_out_port: Option<String>,
+    #[serde(default)]
+    tc_out_rate: TcRate,
 }
 
 impl Default for Settings {
@@ -194,6 +217,12 @@ impl Default for Settings {
             ntp_nic: None,
             ptp_nic: None,
             osc_instance_name: None,
+            ltc_out_enabled: false,
+            ltc_out_device: None,
+            ltc_out_level_db: default_ltc_out_level_db(),
+            mtc_out_enabled: false,
+            mtc_out_port: None,
+            tc_out_rate: TcRate::default(),
         }
     }
 }
@@ -224,7 +253,10 @@ fn format_hms(total_secs: u64) -> String {
 
 impl Stopwatch {
     fn new() -> Self {
-        Self { acc: Duration::ZERO, since: None }
+        Self {
+            acc: Duration::ZERO,
+            since: None,
+        }
     }
 
     fn elapsed(&self) -> Duration {
@@ -361,6 +393,10 @@ struct App {
     ltc: ltc::LtcReceiver,
     #[cfg(feature = "full-sources")]
     osc: Option<osc::OscReceiver>,
+    #[cfg(feature = "tc-out")]
+    ltc_out: ltc_out::LtcGenerator,
+    #[cfg(feature = "tc-out")]
+    mtc_out: mtc_out::MtcSender,
 
     settings_open: bool,
 
@@ -378,6 +414,16 @@ struct App {
     ltc_devices: Vec<String>,
     #[cfg(feature = "full-sources")]
     ltc_selected: String,
+    #[cfg(feature = "tc-out")]
+    ltc_out_devices: Vec<String>,
+    #[cfg(feature = "tc-out")]
+    ltc_out_selected: String,
+    #[cfg(feature = "tc-out")]
+    mtc_out_ports: Vec<String>,
+    #[cfg(feature = "tc-out")]
+    mtc_out_selected: String,
+    #[cfg(feature = "tc-out")]
+    tc_out_lists_loaded: bool,
 
     // NIC list for NTP/PTP interface selection (cached; refreshed on settings open / Refresh click)
     nic_list: Vec<(String, Ipv4Addr)>,
@@ -404,7 +450,10 @@ impl App {
             let mut fonts = egui::FontDefinitions::default();
             fonts.font_data.insert(
                 "dseg7".to_owned(),
-                egui::FontData::from_static(include_bytes!("../assets/fonts/DSEG7Classic-Bold.ttf")).into(),
+                egui::FontData::from_static(include_bytes!(
+                    "../assets/fonts/DSEG7Classic-Bold.ttf"
+                ))
+                .into(),
             );
             fonts.families.insert(
                 FontFamily::Name("dseg7".into()),
@@ -461,12 +510,39 @@ impl App {
         #[cfg(feature = "full-sources")]
         let osc = osc::OscReceiver::new(settings.osc_instance_name.clone()).ok();
 
+        #[cfg(feature = "tc-out")]
+        let mut ltc_out = ltc_out::LtcGenerator::new();
+        #[cfg(feature = "tc-out")]
+        if settings.ltc_out_enabled {
+            let _ = ltc_out.start(
+                settings.ltc_out_device.as_deref(),
+                settings.tc_out_rate,
+                settings.ltc_out_level_db,
+            );
+        }
+
+        #[cfg(feature = "tc-out")]
+        let mut mtc_out = mtc_out::MtcSender::new();
+        #[cfg(feature = "tc-out")]
+        if settings.mtc_out_enabled {
+            if let Some(port) = settings.mtc_out_port.as_deref() {
+                let _ = mtc_out.start(port, settings.tc_out_rate);
+            }
+        }
+
         let ntp_server_edit = settings.ntp_server.clone();
 
         // Build initial NIC display strings from persisted settings
         let ntp_nic_selected = settings.ntp_nic.clone().unwrap_or_default();
         #[cfg(feature = "full-sources")]
         let ptp_nic_selected = settings.ptp_nic.clone().unwrap_or_default();
+        #[cfg(feature = "tc-out")]
+        let ltc_out_selected = settings
+            .ltc_out_device
+            .clone()
+            .unwrap_or_else(|| "(default)".to_string());
+        #[cfg(feature = "tc-out")]
+        let mtc_out_selected = settings.mtc_out_port.clone().unwrap_or_default();
 
         Self {
             settings,
@@ -480,6 +556,10 @@ impl App {
             ltc,
             #[cfg(feature = "full-sources")]
             osc,
+            #[cfg(feature = "tc-out")]
+            ltc_out,
+            #[cfg(feature = "tc-out")]
+            mtc_out,
             settings_open: false,
             force_exit: false,
             ntp_server_edit,
@@ -491,6 +571,16 @@ impl App {
             ltc_devices: Vec::new(),
             #[cfg(feature = "full-sources")]
             ltc_selected: String::new(),
+            #[cfg(feature = "tc-out")]
+            ltc_out_devices: Vec::new(),
+            #[cfg(feature = "tc-out")]
+            ltc_out_selected,
+            #[cfg(feature = "tc-out")]
+            mtc_out_ports: Vec::new(),
+            #[cfg(feature = "tc-out")]
+            mtc_out_selected,
+            #[cfg(feature = "tc-out")]
+            tc_out_lists_loaded: false,
             nic_list: Vec::new(),
             default_ip: None,
             ntp_nic_selected,
@@ -504,13 +594,145 @@ impl App {
         self.nic_list = list_nics();
         self.default_ip = default_route_ip();
     }
+
+    #[cfg(feature = "tc-out")]
+    fn restart_ltc_out(&mut self) {
+        self.ltc_out.stop();
+        if self.settings.ltc_out_enabled {
+            let _ = self.ltc_out.start(
+                self.settings.ltc_out_device.as_deref(),
+                self.settings.tc_out_rate,
+                self.settings.ltc_out_level_db,
+            );
+        }
+    }
+
+    #[cfg(feature = "tc-out")]
+    fn restart_mtc_out(&mut self) {
+        self.mtc_out.stop();
+        if self.settings.mtc_out_enabled {
+            if let Some(port) = self.settings.mtc_out_port.as_deref() {
+                let _ = self.mtc_out.start(port, self.settings.tc_out_rate);
+            }
+        }
+    }
+
+    #[cfg(feature = "tc-out")]
+    fn outputs_active(&self) -> bool {
+        self.ltc_out.is_active() || self.mtc_out.is_active()
+    }
+
+    #[cfg(feature = "tc-out")]
+    fn outgoing_time_target(&self) -> Option<(f64, bool)> {
+        match &self.settings.source {
+            Source::System => Some((
+                datetime_seconds_of_day(now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)),
+                true,
+            )),
+            Source::Ntp => {
+                let offset = self.ntp.status().offset.unwrap_or(0.0);
+                Some((
+                    datetime_seconds_of_day(now_with_tz_offset(
+                        self.settings.tz_offset_minutes,
+                        offset,
+                    )),
+                    true,
+                ))
+            }
+            #[cfg(feature = "full-sources")]
+            Source::Ptp => {
+                let offset = self.ptp.status().offset.unwrap_or(0.0);
+                Some((
+                    datetime_seconds_of_day(now_with_tz_offset(
+                        self.settings.tz_offset_minutes,
+                        offset,
+                    )),
+                    true,
+                ))
+            }
+            #[cfg(feature = "full-sources")]
+            Source::Mtc => {
+                let status = self.mtc.status();
+                status.tc.map(|tc| {
+                    let running = status.age.is_some_and(|age| age < Duration::from_secs(2));
+                    let fps = (status.fps_n as f64).max(1.0);
+                    let mut seconds = timecode_seconds(tc, fps);
+                    if running {
+                        seconds += status.age.map_or(0.0, |age| age.as_secs_f64());
+                    }
+                    (seconds, running)
+                })
+            }
+            #[cfg(feature = "full-sources")]
+            Source::Ltc => {
+                let status = self.ltc.status();
+                status.tc.map(|tc| {
+                    let running = status.age.is_some_and(|age| age < Duration::from_secs(2));
+                    let fps = (status.fps_n as f64).max(1.0);
+                    let mut seconds = timecode_seconds(tc, fps);
+                    if running {
+                        seconds += status.age.map_or(0.0, |age| age.as_secs_f64());
+                    }
+                    (seconds, running)
+                })
+            }
+            #[cfg(feature = "full-sources")]
+            Source::Osc => self.osc.as_ref().and_then(|receiver| {
+                let status = receiver.status();
+                if !status.connected {
+                    return None;
+                }
+                status.pos.map(|pos| {
+                    let fps = (pos.fps as f64).max(1.0);
+                    let tc = tc::Timecode {
+                        h: pos.tc_hh.clamp(0, 23) as u8,
+                        m: pos.tc_mm.clamp(0, 59) as u8,
+                        s: pos.tc_ss.clamp(0, 59) as u8,
+                        f: pos.tc_ff.max(0) as u8,
+                    };
+                    let mut seconds = timecode_seconds(tc, fps);
+                    if pos.playing {
+                        seconds += pos
+                            .last_recv_instant
+                            .map_or(0.0, |received| received.elapsed().as_secs_f64());
+                    }
+                    (seconds, pos.playing)
+                })
+            }),
+            #[cfg(not(feature = "full-sources"))]
+            _ => Some((
+                datetime_seconds_of_day(now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)),
+                true,
+            )),
+        }
+    }
+
+    #[cfg(feature = "tc-out")]
+    fn update_timecode_targets(&self) {
+        if !self.outputs_active() {
+            return;
+        }
+
+        let ltc_target = self.ltc_out.target();
+        let mtc_target = self.mtc_out.target();
+        if let Some((seconds, running)) = self.outgoing_time_target() {
+            ltc_target.set(seconds, running);
+            mtc_target.set(seconds, running);
+        } else {
+            ltc_target.clear();
+            mtc_target.clear();
+        }
+    }
 }
 
 // ── Time helpers ─────────────────────────────────────────────────────────────
 
 /// Current time in the given fixed zone (minutes east of UTC) with an optional
 /// sync offset (seconds) applied. tz_minutes = 540 → JST.
-fn now_with_tz_offset(tz_minutes: i32, sync_offset_secs: f64) -> chrono::DateTime<chrono::FixedOffset> {
+fn now_with_tz_offset(
+    tz_minutes: i32,
+    sync_offset_secs: f64,
+) -> chrono::DateTime<chrono::FixedOffset> {
     use chrono::{Duration as CDuration, FixedOffset, Utc};
     let tz = FixedOffset::east_opt(tz_minutes * 60)
         .or_else(|| FixedOffset::east_opt(9 * 3600))
@@ -520,10 +742,24 @@ fn now_with_tz_offset(tz_minutes: i32, sync_offset_secs: f64) -> chrono::DateTim
     (utc + CDuration::microseconds(micros)).with_timezone(&tz)
 }
 
+#[cfg(feature = "tc-out")]
+fn datetime_seconds_of_day(dt: chrono::DateTime<chrono::FixedOffset>) -> f64 {
+    use chrono::Timelike;
+    dt.hour() as f64 * 3_600.0
+        + dt.minute() as f64 * 60.0
+        + dt.second() as f64
+        + dt.nanosecond() as f64 / 1_000_000_000.0
+}
+
+#[cfg(all(feature = "tc-out", feature = "full-sources"))]
+fn timecode_seconds(tc: tc::Timecode, fps: f64) -> f64 {
+    tc.h as f64 * 3_600.0 + tc.m as f64 * 60.0 + tc.s as f64 + tc.f as f64 / fps.max(1.0)
+}
+
 // ── Colors ───────────────────────────────────────────────────────────────────
 
 const AMBER: Color32 = Color32::from_rgb(0xFF, 0xB3, 0x00);
-#[cfg(feature = "full-sources")]
+#[cfg(any(feature = "full-sources", feature = "tc-out"))]
 const RED_SIG: Color32 = Color32::from_rgb(0xFF, 0x55, 0x44);
 
 // ── eframe::App ──────────────────────────────────────────────────────────────
@@ -568,7 +804,17 @@ impl eframe::App for App {
             }
         });
 
-        // Repaint at ~20 fps (minimal CPU for long streaming sessions)
+        #[cfg(feature = "tc-out")]
+        self.update_timecode_targets();
+
+        // Keep output controls/status responsive at roughly one video frame.
+        #[cfg(feature = "tc-out")]
+        if self.outputs_active() {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        #[cfg(not(feature = "tc-out"))]
         ctx.request_repaint_after(Duration::from_millis(50));
     }
 
@@ -669,7 +915,10 @@ impl eframe::App for App {
                         let utc_off = ptp_status.utc_offset.unwrap_or(0);
                         let age = ptp_status.last_sync_age_s.unwrap_or(0);
                         let dom = ptp_status.domain;
-                        format!("PTP dom{} master {} utc{:+} {}s ago", dom, master, utc_off, age)
+                        format!(
+                            "PTP dom{} master {} utc{:+} {}s ago",
+                            dom, master, utc_off, age
+                        )
                     }
                     None => {
                         let err = ptp_status.error.as_deref().unwrap_or("no master");
@@ -693,25 +942,48 @@ impl eframe::App for App {
                                 // Freewheel: advance by elapsed frames
                                 let extra_frames = (a.as_secs_f64() * fps_label as f64) as u64;
                                 let live = tc.advanced_by(extra_frames, fps_n);
-                                let t = if self.settings.show_frames { live.hmsf() } else { live.hms() };
-                                let st = format!("MTC {} {:.2}fps {}", port, fps_label, live.hmsf());
+                                let t = if self.settings.show_frames {
+                                    live.hmsf()
+                                } else {
+                                    live.hms()
+                                };
+                                let st =
+                                    format!("MTC {} {:.2}fps {}", port, fps_label, live.hmsf());
                                 // Phase = fraction of the current second in the freewheeled timecode
-                                let ph = ((live.f as f64 + (a.as_secs_f64() * fps_label as f64).fract()) / fps_label as f64).clamp(0.0, 0.999);
+                                let ph = ((live.f as f64
+                                    + (a.as_secs_f64() * fps_label as f64).fract())
+                                    / fps_label as f64)
+                                    .clamp(0.0, 0.999);
                                 (t, col_bright, st, col_dim, ph)
                             }
                             _ => {
                                 // No signal: hold last value; fall back to system phase
-                                let t = if self.settings.show_frames { tc.hmsf() } else { tc.hms() };
+                                let t = if self.settings.show_frames {
+                                    tc.hmsf()
+                                } else {
+                                    tc.hms()
+                                };
                                 let st = format!("MTC NO SIGNAL (last {})", tc.hmsf());
-                                let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0).timestamp_subsec_micros() as f64 * 1e-6;
+                                let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
+                                    .timestamp_subsec_micros()
+                                    as f64
+                                    * 1e-6;
                                 (t, RED_SIG, st, RED_SIG, ph)
                             }
                         }
                     }
                     None => {
                         let err = mtc_status.error.as_deref().unwrap_or("no signal");
-                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0).timestamp_subsec_micros() as f64 * 1e-6;
-                        ("--:--:--".to_string(), RED_SIG, format!("MTC {}", err), RED_SIG, ph)
+                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
+                            .timestamp_subsec_micros() as f64
+                            * 1e-6;
+                        (
+                            "--:--:--".to_string(),
+                            RED_SIG,
+                            format!("MTC {}", err),
+                            RED_SIG,
+                            ph,
+                        )
                     }
                 };
                 (t, tc_color, st, st_color, ph)
@@ -724,28 +996,48 @@ impl eframe::App for App {
                 let device = ltc_status.device.as_deref().unwrap_or("?");
 
                 let (t, tc_color, st, st_color, ph) = match ltc_status.tc {
-                    Some(tc) => {
-                        match age {
-                            Some(a) if a < Duration::from_secs(2) => {
-                                let extra_frames = (a.as_secs_f64() * fps_label as f64) as u64;
-                                let live = tc.advanced_by(extra_frames, fps_n);
-                                let t = if self.settings.show_frames { live.hmsf() } else { live.hms() };
-                                let st = format!("LTC {} {:.2}fps {}", device, fps_label, live.hmsf());
-                                let ph = ((live.f as f64 + (a.as_secs_f64() * fps_label as f64).fract()) / fps_label as f64).clamp(0.0, 0.999);
-                                (t, col_bright, st, col_dim, ph)
-                            }
-                            _ => {
-                                let t = if self.settings.show_frames { tc.hmsf() } else { tc.hms() };
-                                let st = format!("LTC NO SIGNAL (last {})", tc.hmsf());
-                                let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0).timestamp_subsec_micros() as f64 * 1e-6;
-                                (t, RED_SIG, st, RED_SIG, ph)
-                            }
+                    Some(tc) => match age {
+                        Some(a) if a < Duration::from_secs(2) => {
+                            let extra_frames = (a.as_secs_f64() * fps_label as f64) as u64;
+                            let live = tc.advanced_by(extra_frames, fps_n);
+                            let t = if self.settings.show_frames {
+                                live.hmsf()
+                            } else {
+                                live.hms()
+                            };
+                            let st = format!("LTC {} {:.2}fps {}", device, fps_label, live.hmsf());
+                            let ph = ((live.f as f64
+                                + (a.as_secs_f64() * fps_label as f64).fract())
+                                / fps_label as f64)
+                                .clamp(0.0, 0.999);
+                            (t, col_bright, st, col_dim, ph)
                         }
-                    }
+                        _ => {
+                            let t = if self.settings.show_frames {
+                                tc.hmsf()
+                            } else {
+                                tc.hms()
+                            };
+                            let st = format!("LTC NO SIGNAL (last {})", tc.hmsf());
+                            let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
+                                .timestamp_subsec_micros()
+                                as f64
+                                * 1e-6;
+                            (t, RED_SIG, st, RED_SIG, ph)
+                        }
+                    },
                     None => {
                         let err = ltc_status.error.as_deref().unwrap_or("no signal");
-                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0).timestamp_subsec_micros() as f64 * 1e-6;
-                        ("--:--:--".to_string(), RED_SIG, format!("LTC {}", err), RED_SIG, ph)
+                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
+                            .timestamp_subsec_micros() as f64
+                            * 1e-6;
+                        (
+                            "--:--:--".to_string(),
+                            RED_SIG,
+                            format!("LTC {}", err),
+                            RED_SIG,
+                            ph,
+                        )
                     }
                 };
                 (t, tc_color, st, st_color, ph)
@@ -757,7 +1049,7 @@ impl eframe::App for App {
                 match &osc_status {
                     Some(st) if st.connected => {
                         let pos = st.pos.as_ref().unwrap(); // connected implies Some
-                        // Timecode row (primary large display)
+                                                            // Timecode row (primary large display)
                         let t = format!(
                             "{:02}:{:02}:{:02}:{:02}",
                             pos.tc_hh, pos.tc_mm, pos.tc_ss, pos.tc_ff
@@ -789,7 +1081,8 @@ impl eframe::App for App {
                         // Not connected but receiver exists
                         let port = st.port;
                         let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
-                            .timestamp_subsec_micros() as f64 * 1e-6;
+                            .timestamp_subsec_micros() as f64
+                            * 1e-6;
                         (
                             "--:--:--:--".to_string(),
                             col_grey,
@@ -800,7 +1093,8 @@ impl eframe::App for App {
                     }
                     None => {
                         let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
-                            .timestamp_subsec_micros() as f64 * 1e-6;
+                            .timestamp_subsec_micros() as f64
+                            * 1e-6;
                         (
                             "--:--:--:--".to_string(),
                             col_grey,
@@ -825,6 +1119,18 @@ impl eframe::App for App {
                 };
                 (t, col_bright, "SYS JST".to_string(), col_dim, ph)
             }
+        };
+
+        #[cfg(feature = "tc-out")]
+        let status_str = {
+            let mut status_str = status_str;
+            if self.ltc_out.is_active() {
+                status_str.push_str("  LTC▶");
+            }
+            if self.mtc_out.is_active() {
+                status_str.push_str("  MTC▶");
+            }
+            status_str
         };
 
         // Stopwatch: phase-aligned display (increments only at clock-source second flips)
@@ -884,7 +1190,11 @@ impl eframe::App for App {
                 let s = (avail.x / 480.0).min(avail.y / 320.0);
 
                 // Font sizes (SevenSeg glyphs are wider; apply 0.80 factor to fit)
-                let seg_scale = if self.settings.font_style == FontStyle::SevenSeg { 0.80 } else { 1.0 };
+                let seg_scale = if self.settings.font_style == FontStyle::SevenSeg {
+                    0.80
+                } else {
+                    1.0
+                };
                 let sz_date = 26.0 * s * seg_scale;
                 let time_scale = if self.settings.show_frames { 0.72 } else { 1.0 };
                 let sz_time = 92.0 * s * time_scale * seg_scale;
@@ -919,31 +1229,49 @@ impl eframe::App for App {
                 bg_response.context_menu(|ui| {
                     ui.label("Time source");
                     ui.separator();
-                    if ui.radio(self.settings.source == Source::System, "System").clicked() {
+                    if ui
+                        .radio(self.settings.source == Source::System, "System")
+                        .clicked()
+                    {
                         self.settings.source = Source::System;
                         ui.close();
                     }
-                    if ui.radio(self.settings.source == Source::Ntp, "NTP").clicked() {
+                    if ui
+                        .radio(self.settings.source == Source::Ntp, "NTP")
+                        .clicked()
+                    {
                         self.settings.source = Source::Ntp;
                         ui.close();
                     }
                     #[cfg(feature = "full-sources")]
-                    if ui.radio(self.settings.source == Source::Ptp, "PTP").clicked() {
+                    if ui
+                        .radio(self.settings.source == Source::Ptp, "PTP")
+                        .clicked()
+                    {
                         self.settings.source = Source::Ptp;
                         ui.close();
                     }
                     #[cfg(feature = "full-sources")]
-                    if ui.radio(self.settings.source == Source::Mtc, "MTC").clicked() {
+                    if ui
+                        .radio(self.settings.source == Source::Mtc, "MTC")
+                        .clicked()
+                    {
                         self.settings.source = Source::Mtc;
                         ui.close();
                     }
                     #[cfg(feature = "full-sources")]
-                    if ui.radio(self.settings.source == Source::Ltc, "LTC").clicked() {
+                    if ui
+                        .radio(self.settings.source == Source::Ltc, "LTC")
+                        .clicked()
+                    {
                         self.settings.source = Source::Ltc;
                         ui.close();
                     }
                     #[cfg(feature = "full-sources")]
-                    if ui.radio(self.settings.source == Source::Osc, "OSC").clicked() {
+                    if ui
+                        .radio(self.settings.source == Source::Osc, "OSC")
+                        .clicked()
+                    {
                         self.settings.source = Source::Osc;
                         ui.close();
                     }
@@ -953,7 +1281,10 @@ impl eframe::App for App {
                     } else {
                         "Always on top [OFF]"
                     };
-                    if ui.checkbox(&mut self.settings.topmost, topmost_label).clicked() {
+                    if ui
+                        .checkbox(&mut self.settings.topmost, topmost_label)
+                        .clicked()
+                    {
                         let level = if self.settings.topmost {
                             egui::viewport::WindowLevel::AlwaysOnTop
                         } else {
@@ -1061,11 +1392,8 @@ impl eframe::App for App {
                     ),
                     Vec2::splat(grip_size),
                 );
-                let grip_response = ui.interact(
-                    grip_rect,
-                    ui.id().with("resize_grip"),
-                    Sense::drag(),
-                );
+                let grip_response =
+                    ui.interact(grip_rect, ui.id().with("resize_grip"), Sense::drag());
                 if grip_response.drag_started() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(
                         egui::ResizeDirection::SouthEast,
@@ -1151,6 +1479,13 @@ impl eframe::App for App {
                     devs.insert(0, "(default)".to_string());
                     devs
                 };
+            }
+            #[cfg(feature = "tc-out")]
+            if !self.tc_out_lists_loaded {
+                self.mtc_out_ports = mtc_out::MtcSender::list_ports();
+                self.ltc_out_devices = ltc_out::LtcGenerator::list_devices();
+                self.ltc_out_devices.insert(0, "(default)".to_string());
+                self.tc_out_lists_loaded = true;
             }
             // Refresh NIC list once per frame while settings open (cheap after first call)
             if self.nic_list.is_empty() {
@@ -1399,6 +1734,164 @@ impl eframe::App for App {
                         });
                     });
 
+                    #[cfg(feature = "tc-out")]
+                    {
+                        ui.separator();
+                        ui.collapsing("Timecode Output", |ui| {
+                            let previous_rate = self.settings.tc_out_rate;
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Rate:");
+                                for rate in TcRate::ALL {
+                                    ui.radio_value(
+                                        &mut self.settings.tc_out_rate,
+                                        rate,
+                                        rate.label(),
+                                    );
+                                }
+                            });
+                            if self.settings.tc_out_rate != previous_rate {
+                                self.restart_ltc_out();
+                                self.restart_mtc_out();
+                            }
+
+                            ui.add_space(4.0);
+                            let ltc_toggle_changed = ui
+                                .checkbox(&mut self.settings.ltc_out_enabled, "LTC out (audio)")
+                                .changed();
+                            if ltc_toggle_changed {
+                                if self.settings.ltc_out_enabled {
+                                    self.restart_ltc_out();
+                                } else {
+                                    self.ltc_out.stop();
+                                }
+                            }
+
+                            let previous_device = self.ltc_out_selected.clone();
+                            ui.horizontal(|ui| {
+                                ui.label("Device:");
+                                egui::ComboBox::from_id_salt("ltc_out_device_combo")
+                                    .selected_text(&self.ltc_out_selected)
+                                    .show_ui(ui, |ui| {
+                                        for device in self.ltc_out_devices.clone() {
+                                            ui.selectable_value(
+                                                &mut self.ltc_out_selected,
+                                                device.clone(),
+                                                device,
+                                            );
+                                        }
+                                    });
+                                if ui.button("Refresh").clicked() {
+                                    self.ltc_out_devices = ltc_out::LtcGenerator::list_devices();
+                                    self.ltc_out_devices
+                                        .insert(0, "(default)".to_string());
+                                }
+                            });
+                            if self.ltc_out_selected != previous_device {
+                                self.settings.ltc_out_device =
+                                    if self.ltc_out_selected == "(default)" {
+                                        None
+                                    } else {
+                                        Some(self.ltc_out_selected.clone())
+                                    };
+                                self.restart_ltc_out();
+                            }
+
+                            let previous_level = self.settings.ltc_out_level_db;
+                            ui.horizontal(|ui| {
+                                ui.label("Level:");
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut self.settings.ltc_out_level_db,
+                                        -30.0..=0.0,
+                                    )
+                                    .suffix(" dBFS"),
+                                );
+                            });
+                            if self.settings.ltc_out_level_db != previous_level
+                                && self.settings.ltc_out_enabled
+                            {
+                                self.restart_ltc_out();
+                            }
+
+                            let ltc_status = self.ltc_out.status();
+                            if let Some(error) = ltc_status.error {
+                                ui.colored_label(RED_SIG, format!("Error: {error}"));
+                            } else if self.ltc_out.is_active() {
+                                let value = ltc_status
+                                    .tc
+                                    .map_or_else(|| "--:--:--:--".to_string(), |tc| tc.hmsf());
+                                ui.label(format!(
+                                    "status: emitting {} @{}",
+                                    value, ltc_status.rate_label
+                                ));
+                            } else {
+                                ui.label("status: stopped");
+                            }
+
+                            ui.add_space(6.0);
+                            let mtc_toggle_changed = ui
+                                .checkbox(&mut self.settings.mtc_out_enabled, "MTC out (MIDI)")
+                                .changed();
+                            if mtc_toggle_changed {
+                                if self.settings.mtc_out_enabled {
+                                    self.restart_mtc_out();
+                                } else {
+                                    self.mtc_out.stop();
+                                }
+                            }
+
+                            let previous_port = self.mtc_out_selected.clone();
+                            ui.horizontal(|ui| {
+                                ui.label("Port:");
+                                egui::ComboBox::from_id_salt("mtc_out_port_combo")
+                                    .selected_text(if self.mtc_out_selected.is_empty() {
+                                        "(none)"
+                                    } else {
+                                        &self.mtc_out_selected
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        for port in self.mtc_out_ports.clone() {
+                                            ui.selectable_value(
+                                                &mut self.mtc_out_selected,
+                                                port.clone(),
+                                                port,
+                                            );
+                                        }
+                                    });
+                                if ui.button("Refresh").clicked() {
+                                    self.mtc_out_ports = mtc_out::MtcSender::list_ports();
+                                }
+                            });
+                            if self.mtc_out_selected != previous_port {
+                                self.settings.mtc_out_port = if self.mtc_out_selected.is_empty() {
+                                    None
+                                } else {
+                                    Some(self.mtc_out_selected.clone())
+                                };
+                                self.restart_mtc_out();
+                            }
+
+                            let mtc_status = self.mtc_out.status();
+                            if self.settings.mtc_out_enabled
+                                && self.settings.mtc_out_port.is_none()
+                            {
+                                ui.colored_label(RED_SIG, "Select a MIDI output port");
+                            } else if let Some(error) = mtc_status.error {
+                                ui.colored_label(RED_SIG, format!("Error: {error}"));
+                            } else if self.mtc_out.is_active() {
+                                let value = mtc_status
+                                    .tc
+                                    .map_or_else(|| "--:--:--:--".to_string(), |tc| tc.hmsf());
+                                ui.label(format!(
+                                    "status: emitting {} @{}",
+                                    value, mtc_status.rate_label
+                                ));
+                            } else {
+                                ui.label("status: stopped");
+                            }
+                        });
+                    }
+
                     // NTP interface combo
                     ui.horizontal(|ui| {
                         ui.label("NTP interface:");
@@ -1628,6 +2121,10 @@ impl eframe::App for App {
         } else {
             // Clear NIC list when settings closed so it refreshes on next open
             self.nic_list.clear();
+            #[cfg(feature = "tc-out")]
+            {
+                self.tc_out_lists_loaded = false;
+            }
         }
     }
 }

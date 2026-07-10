@@ -27,12 +27,14 @@ versions. A complete transitive list with license texts can be generated with
 | chrono    | MIT OR Apache-2.0   |
 | serde     | MIT OR Apache-2.0   |
 | if-addrs  | MIT OR Apache-2.0   |
+| socket2   | MIT OR Apache-2.0   |
 | midir     | MIT                 |
 | cpal      | Apache-2.0          |
 
-`midir` and `cpal` are only compiled into the **full** build (Cargo feature
-`full-sources`, for MTC/LTC). The **App Store / lite** build
-(`--no-default-features`) excludes them.
+`midir` and `cpal` are compiled into both the **full** build (`full-sources`) and
+the **App Store / lite** timecode-output build
+(`--no-default-features --features tc-out`). The lite build excludes MTC/LTC
+capture while retaining CoreMIDI/audio playback output.
 
 All of the above are permissive licenses compatible with MIT distribution and with
 Apple App Store distribution. Retain the copyright notices when redistributing.
