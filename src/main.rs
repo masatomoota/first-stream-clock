@@ -2,9 +2,14 @@
 
 mod tc;
 mod ntp;
+#[cfg(feature = "full-sources")]
 mod mtc;
+#[cfg(feature = "full-sources")]
 mod ltc;
+#[cfg(feature = "full-sources")]
 mod ptp;
+#[cfg(feature = "full-sources")]
+mod osc;
 
 use eframe::egui::{
     self, CentralPanel, Color32, FontFamily, FontId, Key, Label, Rect, RichText, Sense, Vec2,
@@ -45,6 +50,38 @@ fn default_route_ip() -> Option<Ipv4Addr> {
     }
 }
 
+/// Best-effort load of a system font with CJK coverage, so non-ASCII device
+/// names (MIDI ports, audio inputs, NICs) render instead of tofu (□) boxes.
+/// Returns (logical_name, font_bytes, ttc_face_index); None if no candidate
+/// exists on this machine.
+fn load_system_cjk_font() -> Option<(String, Vec<u8>, u32)> {
+    #[cfg(target_os = "macos")]
+    let candidates: &[&str] = &[
+        "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ];
+    #[cfg(target_os = "windows")]
+    let candidates: &[&str] = &[
+        "C:\\Windows\\Fonts\\YuGothM.ttc",
+        "C:\\Windows\\Fonts\\YuGothR.ttc",
+        "C:\\Windows\\Fonts\\meiryo.ttc",
+        "C:\\Windows\\Fonts\\msgothic.ttc",
+    ];
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let candidates: &[&str] = &[
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    ];
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(path) {
+            return Some(("system-cjk".to_owned(), bytes, 0));
+        }
+    }
+    None
+}
+
 // ── Settings ────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -54,6 +91,7 @@ enum Source {
     Ptp,
     Mtc,
     Ltc,
+    Osc,
 }
 
 impl Default for Source {
@@ -68,6 +106,15 @@ fn default_local_fps() -> f32 {
 
 fn default_text_color() -> [u8; 3] {
     [0x00, 0xFF, 0x66]
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Default display time zone in minutes east of UTC. 540 = JST (UTC+9).
+fn default_tz_offset_minutes() -> i32 {
+    540
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -99,6 +146,18 @@ struct Settings {
     text_color: [u8; 3],
     #[serde(default)]
     font_style: FontStyle,
+    /// Show frames (…:FF) on the stopwatch row (off by default).
+    #[serde(default)]
+    show_frames_sw: bool,
+    /// Show the 4th status line row (off by default).
+    #[serde(default)]
+    show_status: bool,
+    /// Show the date row (on by default).
+    #[serde(default = "default_true")]
+    show_date: bool,
+    /// Display time zone, minutes east of UTC. 540 = JST.
+    #[serde(default = "default_tz_offset_minutes")]
+    tz_offset_minutes: i32,
     /// Minimize to taskbar on close instead of quitting.
     #[serde(default)]
     minimize_on_close: bool,
@@ -108,6 +167,9 @@ struct Settings {
     /// Local IPv4 as string for PTP multicast interface; None = auto.
     #[serde(default)]
     ptp_nic: Option<String>,
+    /// mDNS instance name for the OSC receiver. None = hostname.
+    #[serde(default)]
+    osc_instance_name: Option<String>,
 }
 
 impl Default for Settings {
@@ -124,9 +186,14 @@ impl Default for Settings {
             local_fps: 30.0,
             text_color: default_text_color(),
             font_style: FontStyle::Modern,
+            show_frames_sw: false,
+            show_status: false,
+            show_date: true,
+            tz_offset_minutes: 540,
             minimize_on_close: false,
             ntp_nic: None,
             ptp_nic: None,
+            osc_instance_name: None,
         }
     }
 }
@@ -286,9 +353,14 @@ struct App {
     settings: Settings,
     stopwatch: Stopwatch,
     ntp: ntp::NtpHandle,
+    #[cfg(feature = "full-sources")]
     ptp: ptp::PtpHandle,
+    #[cfg(feature = "full-sources")]
     mtc: mtc::MtcReceiver,
+    #[cfg(feature = "full-sources")]
     ltc: ltc::LtcReceiver,
+    #[cfg(feature = "full-sources")]
+    osc: Option<osc::OscReceiver>,
 
     settings_open: bool,
 
@@ -298,9 +370,13 @@ struct App {
 
     // transient UI state for settings window
     ntp_server_edit: String,
+    #[cfg(feature = "full-sources")]
     mtc_ports: Vec<String>,
+    #[cfg(feature = "full-sources")]
     mtc_selected: String,
+    #[cfg(feature = "full-sources")]
     ltc_devices: Vec<String>,
+    #[cfg(feature = "full-sources")]
     ltc_selected: String,
 
     // NIC list for NTP/PTP interface selection (cached; refreshed on settings open / Refresh click)
@@ -308,6 +384,7 @@ struct App {
     default_ip: Option<Ipv4Addr>,
     // Currently-selected display strings for the combos
     ntp_nic_selected: String,
+    #[cfg(feature = "full-sources")]
     ptp_nic_selected: String,
 }
 
@@ -321,7 +398,8 @@ impl App {
         // Force dark theme so settings panel is always readable
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
-        // Register DSEG7 Classic Bold for the 7-segment font style
+        // Register DSEG7 Classic Bold for the 7-segment font style, plus a
+        // best-effort system CJK fallback so Japanese device names render.
         {
             let mut fonts = egui::FontDefinitions::default();
             fonts.font_data.insert(
@@ -332,6 +410,17 @@ impl App {
                 FontFamily::Name("dseg7".into()),
                 vec!["dseg7".to_owned(), "Hack".to_owned()],
             );
+            // Append a system CJK font as a fallback to the default families so
+            // ASCII keeps the bundled look and CJK glyphs (MIDI/audio/NIC names)
+            // fall through instead of rendering as tofu (□) boxes.
+            if let Some((name, bytes, index)) = load_system_cjk_font() {
+                let mut fd = egui::FontData::from_owned(bytes);
+                fd.index = index;
+                fonts.font_data.insert(name.clone(), fd.into());
+                for fam in [FontFamily::Proportional, FontFamily::Monospace] {
+                    fonts.families.entry(fam).or_default().push(name.clone());
+                }
+            }
             cc.egui_ctx.set_fonts(fonts);
         }
 
@@ -343,48 +432,69 @@ impl App {
             }
         }
 
+        #[cfg(feature = "full-sources")]
         let ptp = ptp::spawn(settings.ptp_domain);
         // Apply saved PTP NIC if any
+        #[cfg(feature = "full-sources")]
         if let Some(ref s) = settings.ptp_nic {
             if let Ok(ip) = s.parse::<Ipv4Addr>() {
                 ptp.set_interface(Some(ip));
             }
         }
 
+        #[cfg(feature = "full-sources")]
         let mut mtc = mtc::MtcReceiver::new();
+        #[cfg(feature = "full-sources")]
         if let Some(ref port) = settings.mtc_port {
             let _ = mtc.connect(port);
         }
 
+        #[cfg(feature = "full-sources")]
         let mut ltc = ltc::LtcReceiver::new();
+        #[cfg(feature = "full-sources")]
         if let Some(ref dev) = settings.ltc_device {
             let device_arg: Option<&str> = Some(dev.as_str());
             let _ = ltc.connect(device_arg);
         }
 
+        // OSC receiver: always start so mDNS is advertised immediately.
+        #[cfg(feature = "full-sources")]
+        let osc = osc::OscReceiver::new(settings.osc_instance_name.clone()).ok();
+
         let ntp_server_edit = settings.ntp_server.clone();
 
         // Build initial NIC display strings from persisted settings
         let ntp_nic_selected = settings.ntp_nic.clone().unwrap_or_default();
+        #[cfg(feature = "full-sources")]
         let ptp_nic_selected = settings.ptp_nic.clone().unwrap_or_default();
 
         Self {
             settings,
             stopwatch: Stopwatch::new(),
             ntp,
+            #[cfg(feature = "full-sources")]
             ptp,
+            #[cfg(feature = "full-sources")]
             mtc,
+            #[cfg(feature = "full-sources")]
             ltc,
+            #[cfg(feature = "full-sources")]
+            osc,
             settings_open: false,
             force_exit: false,
             ntp_server_edit,
+            #[cfg(feature = "full-sources")]
             mtc_ports: Vec::new(),
+            #[cfg(feature = "full-sources")]
             mtc_selected: String::new(),
+            #[cfg(feature = "full-sources")]
             ltc_devices: Vec::new(),
+            #[cfg(feature = "full-sources")]
             ltc_selected: String::new(),
             nic_list: Vec::new(),
             default_ip: None,
             ntp_nic_selected,
+            #[cfg(feature = "full-sources")]
             ptp_nic_selected,
         }
     }
@@ -398,22 +508,22 @@ impl App {
 
 // ── Time helpers ─────────────────────────────────────────────────────────────
 
-fn jst_now_with_offset(offset_secs: f64) -> chrono::DateTime<chrono::FixedOffset> {
+/// Current time in the given fixed zone (minutes east of UTC) with an optional
+/// sync offset (seconds) applied. tz_minutes = 540 → JST.
+fn now_with_tz_offset(tz_minutes: i32, sync_offset_secs: f64) -> chrono::DateTime<chrono::FixedOffset> {
     use chrono::{Duration as CDuration, FixedOffset, Utc};
-    let jst = FixedOffset::east_opt(9 * 3600).expect("valid JST offset");
+    let tz = FixedOffset::east_opt(tz_minutes * 60)
+        .or_else(|| FixedOffset::east_opt(9 * 3600))
+        .expect("valid tz offset");
     let utc = Utc::now();
-    let micros = (offset_secs * 1_000_000.0) as i64;
-    let adjusted = utc + CDuration::microseconds(micros);
-    adjusted.with_timezone(&jst)
-}
-
-fn jst_now() -> chrono::DateTime<chrono::FixedOffset> {
-    jst_now_with_offset(0.0)
+    let micros = (sync_offset_secs * 1_000_000.0) as i64;
+    (utc + CDuration::microseconds(micros)).with_timezone(&tz)
 }
 
 // ── Colors ───────────────────────────────────────────────────────────────────
 
 const AMBER: Color32 = Color32::from_rgb(0xFF, 0xB3, 0x00);
+#[cfg(feature = "full-sources")]
 const RED_SIG: Color32 = Color32::from_rgb(0xFF, 0x55, 0x44);
 
 // ── eframe::App ──────────────────────────────────────────────────────────────
@@ -469,9 +579,14 @@ impl eframe::App for App {
 
         // ── Compute current time strings ────────────────────────────────────
         let ntp_status = self.ntp.status();
+        #[cfg(feature = "full-sources")]
         let ptp_status = self.ptp.status();
+        #[cfg(feature = "full-sources")]
         let mtc_status = self.mtc.status();
+        #[cfg(feature = "full-sources")]
         let ltc_status = self.ltc.status();
+        #[cfg(feature = "full-sources")]
+        let osc_status = self.osc.as_ref().map(|r| r.status());
 
         // Derive display colors from text_color setting (bright/dim/dark variants)
         let [tr, tg, tb] = self.settings.text_color;
@@ -488,7 +603,7 @@ impl eframe::App for App {
         );
 
         // Date always from system JST
-        let sys_jst = jst_now();
+        let sys_jst = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0);
         // In SevenSeg mode use dashes (DSEG7 has no slash glyph)
         let date_str = if self.settings.font_style == FontStyle::SevenSeg {
             sys_jst.format("%Y-%m-%d").to_string()
@@ -499,7 +614,7 @@ impl eframe::App for App {
         // Time row: depends on source; also yields phase (sub-second fraction [0,1)) for stopwatch alignment.
         let (time_str, time_color, status_str, status_color, phase) = match &self.settings.source {
             Source::System => {
-                let dt = jst_now();
+                let dt = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0);
                 let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
                 let t = if self.settings.show_frames {
                     let fps = self.settings.local_fps;
@@ -513,7 +628,7 @@ impl eframe::App for App {
             }
             Source::Ntp => {
                 let offset = ntp_status.offset.unwrap_or(0.0);
-                let dt = jst_now_with_offset(offset);
+                let dt = now_with_tz_offset(self.settings.tz_offset_minutes, offset);
                 let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
                 let t = if self.settings.show_frames {
                     let fps = self.settings.local_fps;
@@ -536,9 +651,10 @@ impl eframe::App for App {
                 };
                 (t, col_bright, st, col_dim, ph)
             }
+            #[cfg(feature = "full-sources")]
             Source::Ptp => {
                 let offset = ptp_status.offset.unwrap_or(0.0);
-                let dt = jst_now_with_offset(offset);
+                let dt = now_with_tz_offset(self.settings.tz_offset_minutes, offset);
                 let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
                 let t = if self.settings.show_frames {
                     let fps = self.settings.local_fps;
@@ -562,6 +678,7 @@ impl eframe::App for App {
                 };
                 (t, col_bright, st, col_dim, ph)
             }
+            #[cfg(feature = "full-sources")]
             Source::Mtc => {
                 // Freewheel MTC timecode
                 let age = mtc_status.age;
@@ -586,19 +703,20 @@ impl eframe::App for App {
                                 // No signal: hold last value; fall back to system phase
                                 let t = if self.settings.show_frames { tc.hmsf() } else { tc.hms() };
                                 let st = format!("MTC NO SIGNAL (last {})", tc.hmsf());
-                                let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
+                                let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0).timestamp_subsec_micros() as f64 * 1e-6;
                                 (t, RED_SIG, st, RED_SIG, ph)
                             }
                         }
                     }
                     None => {
                         let err = mtc_status.error.as_deref().unwrap_or("no signal");
-                        let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
+                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0).timestamp_subsec_micros() as f64 * 1e-6;
                         ("--:--:--".to_string(), RED_SIG, format!("MTC {}", err), RED_SIG, ph)
                     }
                 };
                 (t, tc_color, st, st_color, ph)
             }
+            #[cfg(feature = "full-sources")]
             Source::Ltc => {
                 let age = ltc_status.age;
                 let fps_label = ltc_status.fps_label;
@@ -619,24 +737,109 @@ impl eframe::App for App {
                             _ => {
                                 let t = if self.settings.show_frames { tc.hmsf() } else { tc.hms() };
                                 let st = format!("LTC NO SIGNAL (last {})", tc.hmsf());
-                                let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
+                                let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0).timestamp_subsec_micros() as f64 * 1e-6;
                                 (t, RED_SIG, st, RED_SIG, ph)
                             }
                         }
                     }
                     None => {
                         let err = ltc_status.error.as_deref().unwrap_or("no signal");
-                        let ph = jst_now().timestamp_subsec_micros() as f64 * 1e-6;
+                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0).timestamp_subsec_micros() as f64 * 1e-6;
                         ("--:--:--".to_string(), RED_SIG, format!("LTC {}", err), RED_SIG, ph)
                     }
                 };
                 (t, tc_color, st, st_color, ph)
             }
+            #[cfg(feature = "full-sources")]
+            Source::Osc => {
+                // Display values received from the DAW bridge (spec §0: receive & display only).
+                let col_grey = Color32::from_gray(120);
+                match &osc_status {
+                    Some(st) if st.connected => {
+                        let pos = st.pos.as_ref().unwrap(); // connected implies Some
+                        // Timecode row (primary large display)
+                        let t = format!(
+                            "{:02}:{:02}:{:02}:{:02}",
+                            pos.tc_hh, pos.tc_mm, pos.tc_ss, pos.tc_ff
+                        );
+                        // Status row: bar·beat, BPM, time sig, source name
+                        let source_name = if st.meta.source_name.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{}]", st.meta.source_name)
+                        };
+                        let play_sym = if pos.playing { "▶" } else { "■" };
+                        let st_str = format!(
+                            "OSC {}  BAR {:3} . {:2}  {:.1}BPM  {}/{}  :{:02}{}",
+                            play_sym,
+                            pos.bar,
+                            pos.beat,
+                            pos.bpm,
+                            pos.ts_num,
+                            pos.ts_den,
+                            pos.tc_ff,
+                            source_name,
+                        );
+                        // Sub-second phase from timecode (ff / fps)
+                        let fps = if pos.fps > 0.0 { pos.fps } else { 30.0 };
+                        let ph = (pos.tc_ff as f64 / fps as f64).clamp(0.0, 0.999);
+                        (t, col_bright, st_str, col_dim, ph)
+                    }
+                    Some(st) => {
+                        // Not connected but receiver exists
+                        let port = st.port;
+                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
+                            .timestamp_subsec_micros() as f64 * 1e-6;
+                        (
+                            "--:--:--:--".to_string(),
+                            col_grey,
+                            format!("OSC waiting… (port {})", port),
+                            col_grey,
+                            ph,
+                        )
+                    }
+                    None => {
+                        let ph = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0)
+                            .timestamp_subsec_micros() as f64 * 1e-6;
+                        (
+                            "--:--:--:--".to_string(),
+                            col_grey,
+                            "OSC unavailable".to_string(),
+                            col_grey,
+                            ph,
+                        )
+                    }
+                }
+            }
+            #[cfg(not(feature = "full-sources"))]
+            _ => {
+                // Ptp/Mtc/Ltc/Osc not available in this build; treat as System
+                let dt = now_with_tz_offset(self.settings.tz_offset_minutes, 0.0);
+                let ph = dt.timestamp_subsec_micros() as f64 * 1e-6;
+                let t = if self.settings.show_frames {
+                    let fps = self.settings.local_fps;
+                    let ff = ((ph * fps as f64).floor() as u32).min(fps.ceil() as u32 - 1);
+                    format!("{}:{:02}", dt.format("%H:%M:%S"), ff)
+                } else {
+                    dt.format("%H:%M:%S").to_string()
+                };
+                (t, col_bright, "SYS JST".to_string(), col_dim, ph)
+            }
         };
 
         // Stopwatch: phase-aligned display (increments only at clock-source second flips)
         let sw_secs = self.stopwatch.display_secs(phase);
-        let sw_str = format_hms(sw_secs);
+        let sw_str = if self.settings.show_frames_sw {
+            let fps = self.settings.local_fps;
+            let ff = if self.stopwatch.is_running() {
+                ((phase * fps as f64).floor() as u32).min((fps.ceil() as u32).saturating_sub(1))
+            } else {
+                0
+            };
+            format!("{}:{:02}", format_hms(sw_secs), ff)
+        } else {
+            format_hms(sw_secs)
+        };
         let sw_color = if self.stopwatch.is_running() {
             col_bright
         } else if self.stopwatch.elapsed() > Duration::ZERO {
@@ -691,13 +894,14 @@ impl eframe::App for App {
                 // Estimate total block height (no exact measure without layout pass,
                 // use the font sizes as proxy — monospace line height ≈ font size * 1.2)
                 let line_gap = 4.0 * s;
-                let total_h = sz_date * 1.2
-                    + line_gap
-                    + sz_time * 1.2
-                    + line_gap
-                    + sz_sw * 1.2
-                    + line_gap
-                    + sz_status * 1.2;
+                // Time + stopwatch always present; date/status rows are optional.
+                let mut total_h = sz_time * 1.2 + line_gap + sz_sw * 1.2;
+                if self.settings.show_date {
+                    total_h += sz_date * 1.2 + line_gap;
+                }
+                if self.settings.show_status {
+                    total_h += line_gap + sz_status * 1.2;
+                }
                 let top_pad = ((avail.y - total_h) / 2.0).max(0.0);
 
                 // Full-window drag/interact target (behind text)
@@ -723,16 +927,24 @@ impl eframe::App for App {
                         self.settings.source = Source::Ntp;
                         ui.close();
                     }
+                    #[cfg(feature = "full-sources")]
                     if ui.radio(self.settings.source == Source::Ptp, "PTP").clicked() {
                         self.settings.source = Source::Ptp;
                         ui.close();
                     }
+                    #[cfg(feature = "full-sources")]
                     if ui.radio(self.settings.source == Source::Mtc, "MTC").clicked() {
                         self.settings.source = Source::Mtc;
                         ui.close();
                     }
+                    #[cfg(feature = "full-sources")]
                     if ui.radio(self.settings.source == Source::Ltc, "LTC").clicked() {
                         self.settings.source = Source::Ltc;
+                        ui.close();
+                    }
+                    #[cfg(feature = "full-sources")]
+                    if ui.radio(self.settings.source == Source::Osc, "OSC").clicked() {
+                        self.settings.source = Source::Osc;
                         ui.close();
                     }
                     ui.separator();
@@ -771,21 +983,22 @@ impl eframe::App for App {
                 // ── Clock rows (vertically centered) ──
                 ui.add_space(top_pad);
 
-                // Row 1: Date
-                ui.horizontal(|ui| {
-                    ui.with_layout(
-                        egui::Layout::centered_and_justified(egui::Direction::TopDown),
-                        |ui| {
-                            ui.label(
-                                RichText::new(&date_str)
-                                    .font(FontId::new(sz_date, clock_family.clone()))
-                                    .color(col_bright),
-                            );
-                        },
-                    );
-                });
-
-                ui.add_space(line_gap);
+                // Row 1: Date (toggleable; on by default)
+                if self.settings.show_date {
+                    ui.horizontal(|ui| {
+                        ui.with_layout(
+                            egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                            |ui| {
+                                ui.label(
+                                    RichText::new(&date_str)
+                                        .font(FontId::new(sz_date, clock_family.clone()))
+                                        .color(col_bright),
+                                );
+                            },
+                        );
+                    });
+                    ui.add_space(line_gap);
+                }
 
                 // Row 2: Time
                 ui.horizontal(|ui| {
@@ -822,21 +1035,22 @@ impl eframe::App for App {
                     );
                 });
 
-                ui.add_space(line_gap);
-
-                // Row 4: Status line
-                ui.horizontal(|ui| {
-                    ui.with_layout(
-                        egui::Layout::centered_and_justified(egui::Direction::TopDown),
-                        |ui| {
-                            ui.label(
-                                RichText::new(&status_str)
-                                    .font(FontId::monospace(sz_status))
-                                    .color(status_color),
-                            );
-                        },
-                    );
-                });
+                // Row 4: Status line (hidden by default; toggle in Settings)
+                if self.settings.show_status {
+                    ui.add_space(line_gap);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(
+                            egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                            |ui| {
+                                ui.label(
+                                    RichText::new(&status_str)
+                                        .font(FontId::monospace(sz_status))
+                                        .color(status_color),
+                                );
+                            },
+                        );
+                    });
+                }
 
                 // ── Resize grip (bottom-right corner) ──────────────────────
                 let grip_size = 18.0;
@@ -874,18 +1088,70 @@ impl eframe::App for App {
                         );
                     }
                 }
+
+                // ── Settings gear (top-right; appears on hover) ──────────────
+                // Discoverable entry point to the Settings window — mirrors the
+                // hover affordance users expect from the Windows build. Shared by
+                // Windows and macOS (no platform cfg); right-click menu still works.
+                // Scales with the window (like the clock text); clamped to a comfortable range.
+                let gear_box = (42.0 * s).clamp(34.0, 110.0);
+                let gear_margin = gear_box * 0.18;
+                let gear_rect = Rect::from_min_size(
+                    egui::Pos2::new(
+                        ui.min_rect().min.x + avail.x - gear_box - gear_margin,
+                        ui.min_rect().min.y + gear_margin,
+                    ),
+                    Vec2::splat(gear_box),
+                );
+                let gear_response =
+                    ui.interact(gear_rect, ui.id().with("settings_gear"), Sense::click());
+                if gear_response.clicked() {
+                    self.settings_open = true;
+                }
+                if gear_response.hovered() {
+                    ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                // Show whenever the pointer is over the window (same trigger as the grip).
+                if pointer_in_window || gear_response.hovered() {
+                    let p = ui.painter();
+                    let c = gear_rect.center();
+                    let r = gear_box * 0.32;
+                    let hot = gear_response.hovered();
+                    let a: u8 = if hot { 235 } else { 130 };
+                    let col = Color32::from_rgba_unmultiplied(210, 210, 210, a);
+                    if hot {
+                        p.circle_filled(
+                            c,
+                            gear_box * 0.46,
+                            Color32::from_rgba_unmultiplied(255, 255, 255, 26),
+                        );
+                    }
+                    // 8 teeth radiating outward
+                    let tooth = egui::Stroke::new(r * 0.42, col);
+                    for k in 0..8 {
+                        let ang = std::f32::consts::PI * (k as f32) / 4.0;
+                        let (sa, ca) = ang.sin_cos();
+                        let dir = Vec2::new(ca, sa);
+                        p.line_segment([c + dir * (r * 0.82), c + dir * (r * 1.30)], tooth);
+                    }
+                    // gear body as a thick ring (hollow center reads as the hub)
+                    p.circle_stroke(c, r * 0.62, egui::Stroke::new(r * 0.44, col));
+                }
             });
 
         // ── Settings window ─────────────────────────────────────────────────
         if self.settings_open {
             // Refresh device/port lists and NIC list while settings window is first opened.
             // (Only refresh on the frame it becomes open, or on explicit Refresh click.)
-            self.mtc_ports = mtc::MtcReceiver::list_ports();
-            self.ltc_devices = {
-                let mut devs = ltc::LtcReceiver::list_devices();
-                devs.insert(0, "(default)".to_string());
-                devs
-            };
+            #[cfg(feature = "full-sources")]
+            {
+                self.mtc_ports = mtc::MtcReceiver::list_ports();
+                self.ltc_devices = {
+                    let mut devs = ltc::LtcReceiver::list_devices();
+                    devs.insert(0, "(default)".to_string());
+                    devs
+                };
+            }
             // Refresh NIC list once per frame while settings open (cheap after first call)
             if self.nic_list.is_empty() {
                 self.refresh_nics();
@@ -907,17 +1173,37 @@ impl eframe::App for App {
                         .fill(Color32::from_rgb(18, 18, 18)),
                 )
                 .show(&ctx, |ui| {
-                    // Make all text in this panel readable on dark backgrounds
-                    ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+                    // Make this panel readable on dark backgrounds: dark input/widget
+                    // fills + light text. (A plain WHITE text override alone left the
+                    // text-edit fields white-on-white.)
+                    {
+                        let v = ui.visuals_mut();
+                        v.override_text_color = Some(Color32::from_gray(235));
+                        v.extreme_bg_color = Color32::from_gray(24);
+                        v.widgets.inactive.weak_bg_fill = Color32::from_gray(54);
+                        v.widgets.inactive.bg_fill = Color32::from_gray(54);
+                        v.widgets.inactive.fg_stroke.color = Color32::from_gray(235);
+                        v.widgets.hovered.weak_bg_fill = Color32::from_gray(72);
+                        v.widgets.hovered.bg_fill = Color32::from_gray(72);
+                        v.widgets.hovered.fg_stroke.color = Color32::WHITE;
+                        v.widgets.active.weak_bg_fill = Color32::from_gray(90);
+                        v.widgets.active.fg_stroke.color = Color32::WHITE;
+                        v.widgets.noninteractive.fg_stroke.color = Color32::from_gray(235);
+                    }
 
                     // Source selection
                     ui.heading("Time Source");
                     ui.horizontal(|ui| {
                         ui.radio_value(&mut self.settings.source, Source::System, "System");
                         ui.radio_value(&mut self.settings.source, Source::Ntp, "NTP");
+                        #[cfg(feature = "full-sources")]
                         ui.radio_value(&mut self.settings.source, Source::Ptp, "PTP");
+                        #[cfg(feature = "full-sources")]
                         ui.radio_value(&mut self.settings.source, Source::Mtc, "MTC");
+                        #[cfg(feature = "full-sources")]
                         ui.radio_value(&mut self.settings.source, Source::Ltc, "LTC");
+                        #[cfg(feature = "full-sources")]
+                        ui.radio_value(&mut self.settings.source, Source::Osc, "OSC");
                     });
 
                     ui.separator();
@@ -952,6 +1238,7 @@ impl eframe::App for App {
                     });
 
                     // PTP settings
+                    #[cfg(feature = "full-sources")]
                     ui.collapsing("PTP", |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Domain:");
@@ -980,9 +1267,11 @@ impl eframe::App for App {
                     ui.separator();
 
                     // ── Inputs section ─────────────────────────────────────────────────
+                    #[cfg(feature = "full-sources")]
                     ui.heading("Inputs");
 
                     // MTC settings
+                    #[cfg(feature = "full-sources")]
                     ui.collapsing("MTC (MIDI Timecode)", |ui| {
                         let current_port = self.settings.mtc_port.clone().unwrap_or_default();
                         if self.mtc_selected.is_empty() {
@@ -1025,6 +1314,7 @@ impl eframe::App for App {
                     });
 
                     // LTC settings
+                    #[cfg(feature = "full-sources")]
                     ui.collapsing("LTC (Linear Timecode)", |ui| {
                         let current_dev = self.settings.ltc_device.clone().unwrap_or_default();
                         if self.ltc_selected.is_empty() {
@@ -1073,6 +1363,40 @@ impl eframe::App for App {
                             },
                         };
                         ui.label(ltc_summary);
+                    });
+
+                    // OSC settings
+                    #[cfg(feature = "full-sources")]
+                    ui.collapsing("OSC (StreamClock bridge)", |ui| {
+                        ui.label("Receives /sc/pos from the DAW bridge plugin over UDP.");
+                        if let Some(ref osc_st) = osc_status {
+                            ui.label(format!("UDP listen port: {}", osc_st.port));
+                            if osc_st.connected {
+                                if let Some(ref pos) = osc_st.pos {
+                                    ui.label(format!(
+                                        "Connected  BAR {} . {}  {:.1}BPM  TC {:02}:{:02}:{:02}:{:02}",
+                                        pos.bar, pos.beat, pos.bpm,
+                                        pos.tc_hh, pos.tc_mm, pos.tc_ss, pos.tc_ff
+                                    ));
+                                }
+                            } else {
+                                ui.label("Waiting for /sc/pos…");
+                            }
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("mDNS name:");
+                            let mut name_edit = self.settings.osc_instance_name
+                                .clone()
+                                .unwrap_or_default();
+                            if ui.text_edit_singleline(&mut name_edit).changed() {
+                                self.settings.osc_instance_name = if name_edit.is_empty() {
+                                    None
+                                } else {
+                                    Some(name_edit)
+                                };
+                            }
+                            ui.label("(empty = hostname)");
+                        });
                     });
 
                     // NTP interface combo
@@ -1129,6 +1453,7 @@ impl eframe::App for App {
                     });
 
                     // PTP interface combo
+                    #[cfg(feature = "full-sources")]
                     ui.horizontal(|ui| {
                         ui.label("PTP interface:");
                         let ptp_text = if self.ptp_nic_selected.is_empty() {
@@ -1185,8 +1510,34 @@ impl eframe::App for App {
 
                     ui.separator();
 
-                    // Frames display
-                    ui.checkbox(&mut self.settings.show_frames, "Show frames (HH:MM:SS:FF)");
+                    // Display toggles
+                    ui.checkbox(&mut self.settings.show_date, "Show date row");
+                    ui.checkbox(&mut self.settings.show_frames, "Show frames on clock (HH:MM:SS:FF)");
+                    ui.checkbox(&mut self.settings.show_frames_sw, "Show frames on stopwatch");
+                    ui.checkbox(&mut self.settings.show_status, "Show status line (4th row)");
+
+                    // Time zone (UTC offset in hours; +9 = JST, the default)
+                    ui.horizontal(|ui| {
+                        ui.label("Time zone (UTC):");
+                        let mut tz_hours = self.settings.tz_offset_minutes as f32 / 60.0;
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut tz_hours)
+                                    .speed(0.25)
+                                    .range(-12.0..=14.0)
+                                    .max_decimals(2)
+                                    .suffix("h"),
+                            )
+                            .changed()
+                        {
+                            self.settings.tz_offset_minutes = (tz_hours * 60.0).round() as i32;
+                        }
+                        for &(label, mins) in &[("JST", 540), ("UTC", 0)] {
+                            if ui.small_button(label).clicked() {
+                                self.settings.tz_offset_minutes = mins;
+                            }
+                        }
+                    });
 
                     // Local frame rate (used for System/NTP/PTP when show_frames is on)
                     ui.horizontal(|ui| {

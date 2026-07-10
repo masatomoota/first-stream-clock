@@ -1,7 +1,19 @@
 # temp / logs
+.DS_Store
 _err.txt
 _out.txt
 *.log
 
 /target
 build_log.txt
+
+# build artifacts
+/dist
+
+# internal dev docs / working notes — kept locally, not published
+/HANDOFF.md
+/HANDOFF-MAC.md
+/tasks/
+
+# unused icon candidate (dev artifact)
+assets/icon/icon_cute_candidate.png
