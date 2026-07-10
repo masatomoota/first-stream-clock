@@ -21,10 +21,10 @@ Free and open source under the MIT license.
 
 > **Editions** — both are **free**:
 > - **Full** (Windows / macOS direct download, Homebrew): System / NTP / PTP / MTC / LTC.
-> - **Lite** (macOS App Store, planned): time source limited to **System + NTP** so the
+> - **Lite** (macOS App Store, planned): input sources limited to **System + NTP** so the
 >   build is sandbox-safe and passes review. The App Store build is signed, so it
->   installs with **no Gatekeeper warning** — unlike the directly downloaded full
->   build, which is unsigned and needs the workaround below.
+>   installs with **no Gatekeeper warning**. LTC/MTC timecode output remains available —
+>   unlike the directly downloaded full build, which is unsigned and needs the workaround below.
 >
 > The paid iPad/iPhone edition is a separate, independently-licensed project.
 
@@ -81,7 +81,13 @@ right-click menu.
 | LTC | SMPTE LTC decoded from an audio input (biphase-mark, level/polarity independent) |
 
 MTC/LTC freewheel for 2 s after signal loss, then hold the last value and show a
-red **NO SIGNAL**. (PTP/MTC/LTC are **Full edition only**.)
+red **NO SIGNAL**. (PTP/MTC/LTC **inputs** are Full edition only.)
+
+## Timecode output (LTC / MTC)
+
+In Settings → **Timecode Output**, StreamClock can emit the source it is currently
+displaying as LTC on a selected audio output and MTC on a selected MIDI output.
+Both outputs can run together and share one frame-rate setting. Verified on macOS.
 
 ## Controls
 
@@ -104,6 +110,7 @@ thin outline appears on hover/drag so you can still find the window.
 - **Inputs**: MTC MIDI port / LTC audio input / NTP NIC / PTP NIC (NIC default = Auto,
   the default-route interface). Device names render correctly even when the OS
   reports them in Japanese or other non-ASCII text.
+- **Timecode output**: shared rate, LTC audio output device and level, and MTC MIDI output port.
 - **Display toggles**: show the date row (on by default), show frames (`…:FF`)
   separately for the **clock** and the **stopwatch** (both off by default), and show
   the 4th status-line row (off by default).
@@ -172,14 +179,16 @@ src/
   ptp.rs   — PTPv2 listener (self-contained)
   mtc.rs   — MTC receiver (midir)        [full-sources feature]
   ltc.rs   — LTC decoder (cpal + biphase-mark) [full-sources feature]
+  mtc_out.rs — MTC sender (midir)        [tc-out feature]
+  ltc_out.rs — LTC generator/audio output (cpal) [tc-out feature]
 assets/fonts — DSEG7 Classic Bold (embedded)
 legacy/    — old PowerShell+WPF version (v0.1, reference only)
 deploy.sh  — macOS universal build + bundle + install
 ```
 
 The **Lite / App Store** build is produced with `cargo build --release
---no-default-features`, which compiles out PTP/MTC/LTC and their dependencies
-(midir/cpal) so the result is sandbox-safe.
+--no-default-features --features tc-out`. It compiles out PTP/MTC/LTC input while
+retaining playback/CoreMIDI-based LTC/MTC output.
 
 ## License
 

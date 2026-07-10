@@ -9,7 +9,7 @@ use std::time::Instant;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 
-use crate::tc::{nominal_fps, Timecode};
+use crate::tc::{frame_index_from_tc, nominal_fps, tc_from_frame_index, Timecode};
 
 // ─── shared state ────────────────────────────────────────────────────────────
 
@@ -60,9 +60,7 @@ impl LtcReceiver {
         let host = cpal::default_host();
         match host.input_devices() {
             // cpal 0.18: DeviceTrait::name() removed; use Display impl (to_string())
-            Ok(devs) => devs
-                .map(|d| d.to_string())
-                .collect(),
+            Ok(devs) => devs.map(|d| d.to_string()).collect(),
             Err(_) => vec![],
         }
     }
@@ -87,9 +85,7 @@ impl LtcReceiver {
 
         // cpal 0.18: device name via Display trait
         let dev_name = Some(device.to_string());
-        let cfg = device
-            .default_input_config()
-            .map_err(|e| e.to_string())?;
+        let cfg = device.default_input_config().map_err(|e| e.to_string())?;
         let channels = cfg.channels() as usize;
         // cpal 0.18: SampleRate is now a plain u32, not a newtype (.0 removed)
         let sample_rate = cfg.sample_rate() as f32;
@@ -129,10 +125,8 @@ impl LtcReceiver {
                 device.build_input_stream(
                     cfg2,
                     move |data: &[i16], _| {
-                        let floats: Vec<f32> = data
-                            .iter()
-                            .map(|&s| s as f32 / i16::MAX as f32)
-                            .collect();
+                        let floats: Vec<f32> =
+                            data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
                         feed_callback(&floats, channels, &mut decoder, &shared_data);
                     },
                     move |e| {
@@ -202,10 +196,7 @@ fn feed_callback(
     let mono: Vec<f32> = if channels == 1 {
         data.to_vec()
     } else {
-        data.iter()
-            .step_by(channels)
-            .copied()
-            .collect()
+        data.iter().step_by(channels).copied().collect()
     };
 
     if let Some((tc, measured)) = decoder.feed(&mono) {
@@ -364,7 +355,7 @@ impl LtcDecoder {
 
         let frame_u = ((w >> 0) & 0xF) as u8;
         let frame_t = ((w >> 8) & 0x3) as u8;
-        // bit 10 = drop-frame flag (ignored for timecode value)
+        let drop_frame = ((w >> 10) & 1) != 0;
         let sec_u = ((w >> 16) & 0xF) as u8;
         let sec_t = ((w >> 24) & 0x7) as u8;
         let min_u = ((w >> 32) & 0xF) as u8;
@@ -392,7 +383,11 @@ impl LtcDecoder {
             // Fallback: use 30 fps as a safe default until we have two syncs.
             (30.0, 30u32)
         };
-        let tc_next = tc.advanced_by(1, fps_n);
+        let tc_next = if drop_frame && fps_n == 30 {
+            tc_from_frame_index(frame_index_from_tc(tc, fps_n, true) + 1, fps_n, true)
+        } else {
+            tc.advanced_by(1, fps_n)
+        };
 
         self.last_result = Some((tc_next, measured_fps));
     }
@@ -435,9 +430,8 @@ mod tests {
             // Build the 80-bit word (bit 0 = first transmitted).
             let mut word = [0u8; 80];
 
-            let bcd = |val: u8, bits: usize| -> Vec<u8> {
-                (0..bits).map(|i| (val >> i) & 1).collect()
-            };
+            let bcd =
+                |val: u8, bits: usize| -> Vec<u8> { (0..bits).map(|i| (val >> i) & 1).collect() };
 
             let f_u = tc.f % 10;
             let f_t = tc.f / 10;
@@ -449,38 +443,56 @@ mod tests {
             let h_t = tc.h / 10;
 
             // Frame units → bits 0-3
-            for (i, b) in bcd(f_u, 4).iter().enumerate() { word[i] = *b; }
+            for (i, b) in bcd(f_u, 4).iter().enumerate() {
+                word[i] = *b;
+            }
             // bits 4-7: user bits group 1 (zero)
             // Frame tens → bits 8-9
-            for (i, b) in bcd(f_t, 2).iter().enumerate() { word[8 + i] = *b; }
+            for (i, b) in bcd(f_t, 2).iter().enumerate() {
+                word[8 + i] = *b;
+            }
             // bit 10: drop-frame flag (0)
             // bit 11: color-frame flag (0)
             // bits 12-15: user bits group 2 (zero)
             // Sec units → bits 16-19
-            for (i, b) in bcd(s_u, 4).iter().enumerate() { word[16 + i] = *b; }
+            for (i, b) in bcd(s_u, 4).iter().enumerate() {
+                word[16 + i] = *b;
+            }
             // bits 20-23: user bits group 3 (zero)
             // Sec tens → bits 24-26
-            for (i, b) in bcd(s_t, 3).iter().enumerate() { word[24 + i] = *b; }
+            for (i, b) in bcd(s_t, 3).iter().enumerate() {
+                word[24 + i] = *b;
+            }
             // bit 27: biphase mark correction (0)
             // bits 28-31: user bits group 4 (zero)
             // Min units → bits 32-35
-            for (i, b) in bcd(m_u, 4).iter().enumerate() { word[32 + i] = *b; }
+            for (i, b) in bcd(m_u, 4).iter().enumerate() {
+                word[32 + i] = *b;
+            }
             // bits 36-39: user bits group 5 (zero)
             // Min tens → bits 40-42
-            for (i, b) in bcd(m_t, 3).iter().enumerate() { word[40 + i] = *b; }
+            for (i, b) in bcd(m_t, 3).iter().enumerate() {
+                word[40 + i] = *b;
+            }
             // bit 43: binary group flag (0)
             // bits 44-47: user bits group 6 (zero)
             // Hour units → bits 48-51
-            for (i, b) in bcd(h_u, 4).iter().enumerate() { word[48 + i] = *b; }
+            for (i, b) in bcd(h_u, 4).iter().enumerate() {
+                word[48 + i] = *b;
+            }
             // bits 52-55: user bits group 7 (zero)
             // Hour tens → bits 56-57
-            for (i, b) in bcd(h_t, 2).iter().enumerate() { word[56 + i] = *b; }
+            for (i, b) in bcd(h_t, 2).iter().enumerate() {
+                word[56 + i] = *b;
+            }
             // bit 58: binary group flag (0)
             // bits 59-63: user bits group 8 (zero)
             // Sync word bits 64-79 in transmission order:
             //   0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,1
-            let sync: [u8; 16] = [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,1];
-            for (i, &b) in sync.iter().enumerate() { word[64 + i] = b; }
+            let sync: [u8; 16] = [0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1];
+            for (i, &b) in sync.iter().enumerate() {
+                word[64 + i] = b;
+            }
 
             // Render biphase-mark: toggle at every bit boundary; extra toggle
             // at mid-bit for '1' bits.  Track fractional sample position so
@@ -545,7 +557,17 @@ mod tests {
         let fps_n = 30u32;
 
         let frames: Vec<(Timecode, u32)> = (0..10)
-            .map(|i| (Timecode { h: 1, m: 2, s: 3, f: i }, fps_n))
+            .map(|i| {
+                (
+                    Timecode {
+                        h: 1,
+                        m: 2,
+                        s: 3,
+                        f: i,
+                    },
+                    fps_n,
+                )
+            })
             .collect();
 
         let audio = encode_ltc(&frames, sr, 1.0, false);
@@ -569,7 +591,12 @@ mod tests {
         // The last decoded frame should be 01:02:03:09 advanced by 1 → 01:02:03:10
         assert_eq!(
             last.0,
-            Timecode { h: 1, m: 2, s: 3, f: 10 },
+            Timecode {
+                h: 1,
+                m: 2,
+                s: 3,
+                f: 10
+            },
             "Last TC mismatch: got {:?}",
             last.0
         );
@@ -588,7 +615,17 @@ mod tests {
         let fps_n = 25u32;
 
         let frames: Vec<(Timecode, u32)> = (0..10)
-            .map(|i| (Timecode { h: 0, m: 30, s: 15, f: i }, fps_n))
+            .map(|i| {
+                (
+                    Timecode {
+                        h: 0,
+                        m: 30,
+                        s: 15,
+                        f: i,
+                    },
+                    fps_n,
+                )
+            })
             .collect();
 
         let audio = encode_ltc(&frames, sr, 0.15, true);

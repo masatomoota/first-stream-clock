@@ -2,8 +2,9 @@
 # deploy.sh — Build universal (arm64 + x86_64) macOS .app bundles for StreamClock
 # in BOTH variants, then (optionally) install the FULL build to /Applications.
 #
-#   FULL     — Windows-equivalent: System / NTP / PTP / MTC / LTC.   (default features)
-#   APPSTORE — sandbox-safe light build: System + NTP only.          (--no-default-features)
+#   FULL     — Windows-equivalent: all time sources + LTC/MTC output. (default features)
+#   APPSTORE — sandbox-safe: System + NTP + timecode OUTPUT (LTC/MTC).
+#              (--no-default-features --features tc-out)
 #
 # Usage:
 #   ./deploy.sh           # build + bundle + install FULL to /Applications  (full deploy)
@@ -76,8 +77,8 @@ do_build() {
     || /usr/libexec/PlistBuddy -c "Set :NSMicrophoneUsageDescription $MIC_DESC" "$plist"
   log "[full] Info.plist NSMicrophoneUsageDescription set"
 
-  # APPSTORE (System + NTP only; no mic, sandbox-safe). Entitlements applied at codesign time.
-  build_variant appstore --no-default-features
+  # APPSTORE (System + NTP sources + LTC/MTC output; no mic/capture). Entitlements at codesign.
+  build_variant appstore --no-default-features --features tc-out
   cp "$ROOT/macos/StreamClock.entitlements" "$DIST/appstore/StreamClock.entitlements"
   log "[appstore] entitlements staged next to .app (apply at codesign)"
 

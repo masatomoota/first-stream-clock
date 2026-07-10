@@ -169,7 +169,11 @@ pub fn spawn(domain: u8) -> PtpHandle {
             .expect("spawn ptp-general thread");
     }
 
-    PtpHandle { state, domain: domain_atom, bind_ip: bind_ip_atom }
+    PtpHandle {
+        state,
+        domain: domain_atom,
+        bind_ip: bind_ip_atom,
+    }
 }
 
 // ── Thread bodies ─────────────────────────────────────────────────────────────
@@ -193,7 +197,11 @@ fn bind_with_retry(port: u16, state: &Arc<Mutex<PtpState>>) -> UdpSocket {
 
 /// Decode a packed u32 bind_ip value to Ipv4Addr (0 → UNSPECIFIED).
 fn unpack_ip(raw: u32) -> Ipv4Addr {
-    if raw == 0 { Ipv4Addr::UNSPECIFIED } else { Ipv4Addr::from(raw) }
+    if raw == 0 {
+        Ipv4Addr::UNSPECIFIED
+    } else {
+        Ipv4Addr::from(raw)
+    }
 }
 
 fn setup_socket(sock: &UdpSocket, iface: Ipv4Addr, state: &Arc<Mutex<PtpState>>) {
@@ -205,7 +213,11 @@ fn setup_socket(sock: &UdpSocket, iface: Ipv4Addr, state: &Arc<Mutex<PtpState>>)
     }
 }
 
-fn event_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>, bind_ip_atom: Arc<AtomicU32>) {
+fn event_thread(
+    state: Arc<Mutex<PtpState>>,
+    domain_atom: Arc<AtomicU8>,
+    bind_ip_atom: Arc<AtomicU32>,
+) {
     let mut current_bind_ip = bind_ip_atom.load(Ordering::Relaxed);
     let sock = bind_with_retry(EVENT_PORT, &state);
     setup_socket(&sock, unpack_ip(current_bind_ip), &state);
@@ -280,7 +292,11 @@ fn event_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>, bind_ip
     }
 }
 
-fn general_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>, bind_ip_atom: Arc<AtomicU32>) {
+fn general_thread(
+    state: Arc<Mutex<PtpState>>,
+    domain_atom: Arc<AtomicU8>,
+    bind_ip_atom: Arc<AtomicU32>,
+) {
     let mut current_bind_ip = bind_ip_atom.load(Ordering::Relaxed);
     let mut sock = bind_with_retry(GENERAL_PORT, &state);
     setup_socket(&sock, unpack_ip(current_bind_ip), &state);
@@ -346,8 +362,7 @@ fn general_thread(state: Arc<Mutex<PtpState>>, domain_atom: Arc<AtomicU8>, bind_
                 // normal — loop to check domain/interface change
             }
             Err(e) => {
-                state.lock().unwrap().error =
-                    Some(format!("recv error port {GENERAL_PORT}: {e}"));
+                state.lock().unwrap().error = Some(format!("recv error port {GENERAL_PORT}: {e}"));
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
@@ -416,7 +431,15 @@ pub fn parse_header(pkt: &[u8]) -> Option<PtpHeader> {
     let source_port = u16::from_be_bytes([pkt[28], pkt[29]]);
     let seq_id = u16::from_be_bytes([pkt[30], pkt[31]]);
 
-    Some(PtpHeader { msg_type, domain, two_step, correction_field, source_identity, source_port, seq_id })
+    Some(PtpHeader {
+        msg_type,
+        domain,
+        two_step,
+        correction_field,
+        source_identity,
+        source_port,
+        seq_id,
+    })
 }
 
 /// Parse a 10-byte PTPv2 timestamp (6-byte seconds + 4-byte nanoseconds) into Unix seconds (f64).
@@ -491,9 +514,9 @@ mod tests {
         ts_ns: u32,
     ) -> Vec<u8> {
         let mut pkt = vec![0u8; 44];
-        pkt[0] = msg_type & 0x0F;         // messageType in low nibble, transport=0
-        pkt[1] = PTP_VERSION & 0x0F;       // versionPTP
-        // messageLength (bytes 2-3): 44
+        pkt[0] = msg_type & 0x0F; // messageType in low nibble, transport=0
+        pkt[1] = PTP_VERSION & 0x0F; // versionPTP
+                                     // messageLength (bytes 2-3): 44
         pkt[2] = 0;
         pkt[3] = 44;
         pkt[4] = domain;
@@ -518,8 +541,8 @@ mod tests {
         pkt[35] = ((ts_sec >> 32) & 0xFF) as u8;
         pkt[36] = ((ts_sec >> 24) & 0xFF) as u8;
         pkt[37] = ((ts_sec >> 16) & 0xFF) as u8;
-        pkt[38] = ((ts_sec >>  8) & 0xFF) as u8;
-        pkt[39] = ( ts_sec        & 0xFF) as u8;
+        pkt[38] = ((ts_sec >> 8) & 0xFF) as u8;
+        pkt[39] = (ts_sec & 0xFF) as u8;
         // 4-byte nanoseconds
         let ns = ts_ns.to_be_bytes();
         pkt[40..44].copy_from_slice(&ns);
@@ -542,9 +565,15 @@ mod tests {
     fn parse_sync_one_step() {
         let identity = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01, 0x02];
         let pkt = make_packet(
-            MSG_SYNC, /*domain*/ 0, /*seq*/ 42, /*two_step*/ false,
-            /*correction*/ 0, identity, /*port*/ 1,
-            /*ts_sec*/ 1_700_000_000, /*ts_ns*/ 500_000_000,
+            MSG_SYNC,
+            /*domain*/ 0,
+            /*seq*/ 42,
+            /*two_step*/ false,
+            /*correction*/ 0,
+            identity,
+            /*port*/ 1,
+            /*ts_sec*/ 1_700_000_000,
+            /*ts_ns*/ 500_000_000,
         );
 
         let hdr = parse_header(&pkt).expect("header parsed");
@@ -565,8 +594,15 @@ mod tests {
     fn parse_follow_up() {
         let identity = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
         let pkt = make_packet(
-            MSG_FOLLOW_UP, 1, 99, false, 0, identity, 2,
-            1_700_000_100, 0,
+            MSG_FOLLOW_UP,
+            1,
+            99,
+            false,
+            0,
+            identity,
+            2,
+            1_700_000_100,
+            0,
         );
 
         let hdr = parse_header(&pkt).expect("header");

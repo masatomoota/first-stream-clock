@@ -106,14 +106,40 @@ fn ntp_ts_to_unix(buf: &[u8]) -> f64 {
     sec - NTP_EPOCH_OFFSET + frac / 4_294_967_296.0
 }
 
+/// Create a UDP/IPv4 socket for an outbound request/reply exchange.
+///
+/// The socket is deliberately left **unbound** unless the caller pinned a NIC.
+///
+/// Why: under the macOS App Sandbox (the Mac App Store build),
+/// `com.apple.security.network.client` permits outbound flows but denies `bind(2)`, and it
+/// also denies `recv` on an *unconnected* socket — both fail with `EPERM`. A socket that is
+/// only `connect()`ed needs no bind and receives the server's reply. Measured on macOS 26.5
+/// with sandbox + network.client:
+///   `bind(0.0.0.0:0)` → EPERM · unconnected `recv` → EPERM · `connect`+`send`+`recv` → ok
+///
+/// When the user pinned a source NIC we still try to bind, and fall back to the
+/// default-route interface if the sandbox refuses.
+pub fn unbound_udp_v4(bind_ip: Option<std::net::Ipv4Addr>) -> Result<UdpSocket, String> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let sock =
+        Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).map_err(|e| e.to_string())?;
+    if let Some(ip) = bind_ip {
+        let local: socket2::SockAddr = std::net::SocketAddrV4::new(ip, 0).into();
+        if let Err(e) = sock.bind(&local) {
+            if e.kind() != std::io::ErrorKind::PermissionDenied {
+                return Err(format!("bind {ip}: {e}"));
+            }
+            // Sandboxed: bind is unavailable. Fall through to the default-route interface.
+        }
+    }
+    Ok(sock.into())
+}
+
 /// Returns (clock offset seconds, round-trip delay seconds).
-/// bind_ip: local IPv4 to bind; None → 0.0.0.0 (OS default-route NIC).
+/// bind_ip: local IPv4 to bind; None → OS default-route NIC, with no bind at all.
 fn query(server: &str, bind_ip: Option<std::net::Ipv4Addr>) -> Result<(f64, f64), String> {
-    let local = std::net::SocketAddrV4::new(
-        bind_ip.unwrap_or(std::net::Ipv4Addr::UNSPECIFIED),
-        0,
-    );
-    let sock = UdpSocket::bind(local).map_err(|e| e.to_string())?;
+    let sock = unbound_udp_v4(bind_ip)?;
     sock.set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|e| e.to_string())?;
     let addr = if server.contains(':') {
@@ -168,7 +194,7 @@ mod tests {
     fn query_with_bind_ip_none_does_not_panic() {
         // Confirm query() constructs the socket without panic (network may be unavailable).
         let result = query("240.0.0.1:123", None); // unreachable host, quick timeout
-        // We only check it doesn't panic — error is expected.
+                                                   // We only check it doesn't panic — error is expected.
         let _ = result;
     }
 }

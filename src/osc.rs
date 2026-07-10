@@ -172,7 +172,10 @@ pub fn parse_sc_meta(msg: &OscMessage) -> Option<MetaSnapshot> {
         OscType::String(s) => s.clone(),
         _ => return None,
     };
-    Some(MetaSnapshot { source_name, app_version })
+    Some(MetaSnapshot {
+        source_name,
+        app_version,
+    })
 }
 
 /// Dispatch a decoded OSC message to the inner state.
@@ -215,7 +218,11 @@ fn derive_device_id(hostname: &str) -> String {
 
 /// Build a [`ServiceInfo`] for `_streamclock._udp.local.` and register it.
 /// Returns the daemon so the caller can keep it alive.
-fn advertise_mdns(instance_name: &str, port: u16, device_id: &str) -> Result<ServiceDaemon, String> {
+fn advertise_mdns(
+    instance_name: &str,
+    port: u16,
+    device_id: &str,
+) -> Result<ServiceDaemon, String> {
     let daemon = ServiceDaemon::new().map_err(|e| e.to_string())?;
 
     #[cfg(target_os = "windows")]
@@ -240,7 +247,7 @@ fn advertise_mdns(instance_name: &str, port: u16, device_id: &str) -> Result<Ser
         service_type,
         instance_name,
         &host,
-        "",        // IP — let mdns-sd resolve from host
+        "", // IP — let mdns-sd resolve from host
         port,
         &props[..],
     )
@@ -306,8 +313,7 @@ impl OscReceiver {
                     match socket.recv_from(&mut buf) {
                         Ok((n, _src)) => {
                             if let Ok(packet) = rosc::decoder::decode_udp(&buf[..n]) {
-                                let mut g =
-                                    inner_clone.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut g = inner_clone.lock().unwrap_or_else(|e| e.into_inner());
                                 handle_packet(packet.1, &mut g);
                             }
                         }
@@ -332,7 +338,11 @@ impl OscReceiver {
         let device_id = derive_device_id(&host);
         let mdns = advertise_mdns(&name, port, &device_id).ok();
 
-        Ok(Self { port, inner, _mdns: mdns })
+        Ok(Self {
+            port,
+            inner,
+            _mdns: mdns,
+        })
     }
 
     /// Poll the current OSC status (non-blocking).
@@ -452,22 +462,22 @@ mod tests {
         let msg = OscMessage {
             addr: "/sc/pos".to_string(),
             args: vec![
-                OscType::Int(1),           // 0: schemaVer
-                OscType::Int(playing),     // 1: playing
-                OscType::Int(bar),         // 2: bar
-                OscType::Int(beat),        // 3: beat
-                OscType::Float(beat_phase),// 4: beatPhase
-                OscType::Double(ppq),      // 5: ppq
-                OscType::Float(bpm),       // 6: bpm
-                OscType::Int(ts_num),      // 7: tsNum
-                OscType::Int(ts_den),      // 8: tsDen
-                OscType::Int(tc_hh),       // 9: tcHH
-                OscType::Int(tc_mm),       // 10: tcMM
-                OscType::Int(tc_ss),       // 11: tcSS
-                OscType::Int(tc_ff),       // 12: tcFF
-                OscType::Float(fps),       // 13: fps
-                OscType::Int(drop_frame),  // 14: dropFrame
-                OscType::Double(seconds),  // 15: seconds
+                OscType::Int(1),            // 0: schemaVer
+                OscType::Int(playing),      // 1: playing
+                OscType::Int(bar),          // 2: bar
+                OscType::Int(beat),         // 3: beat
+                OscType::Float(beat_phase), // 4: beatPhase
+                OscType::Double(ppq),       // 5: ppq
+                OscType::Float(bpm),        // 6: bpm
+                OscType::Int(ts_num),       // 7: tsNum
+                OscType::Int(ts_den),       // 8: tsDen
+                OscType::Int(tc_hh),        // 9: tcHH
+                OscType::Int(tc_mm),        // 10: tcMM
+                OscType::Int(tc_ss),        // 11: tcSS
+                OscType::Int(tc_ff),        // 12: tcFF
+                OscType::Float(fps),        // 13: fps
+                OscType::Int(drop_frame),   // 14: dropFrame
+                OscType::Double(seconds),   // 15: seconds
             ],
         };
         encoder::encode(&OscPacket::Message(msg)).expect("encode should succeed")
@@ -554,7 +564,10 @@ mod tests {
     fn parse_sc_pos_drop_frame_true_when_one() {
         let bytes = build_sc_pos_bytes(1, 1, 1, 0.0, 0.0, 29.97, 4, 4, 0, 0, 0, 0, 29.97, 1, 0.0);
         let (_, packet) = rosc::decoder::decode_udp(&bytes).unwrap();
-        let msg = match packet { OscPacket::Message(m) => m, _ => panic!() };
+        let msg = match packet {
+            OscPacket::Message(m) => m,
+            _ => panic!(),
+        };
         let snap = parse_sc_pos(&msg).unwrap();
         assert!(snap.drop_frame, "drop_frame should be true when arg is 1");
     }
@@ -567,9 +580,7 @@ mod tests {
         let port = recv.port;
 
         // Build a datagram and send it via a separate socket.
-        let bytes = build_sc_pos_bytes(
-            1, 7, 2, 0.5, 24.0, 140.0, 3, 4, 0, 1, 30, 0, 30.0, 0, 90.0,
-        );
+        let bytes = build_sc_pos_bytes(1, 7, 2, 0.5, 24.0, 140.0, 3, 4, 0, 1, 30, 0, 30.0, 0, 90.0);
         let sender = std::net::UdpSocket::bind("127.0.0.1:0").expect("sender bind");
         sender
             .send_to(&bytes, format!("127.0.0.1:{port}"))
@@ -579,7 +590,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         let status = recv.status();
-        assert!(status.connected, "should be connected after receiving /sc/pos");
+        assert!(
+            status.connected,
+            "should be connected after receiving /sc/pos"
+        );
         let pos = status.pos.expect("pos snapshot should be set");
         assert_eq!(pos.bar, 7);
         assert_eq!(pos.beat, 2);
@@ -594,7 +608,10 @@ mod tests {
     fn device_id_is_8_hex_chars() {
         let id = derive_device_id("my-macbook");
         assert_eq!(id.len(), 8);
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit()), "id should be hex");
+        assert!(
+            id.chars().all(|c| c.is_ascii_hexdigit()),
+            "id should be hex"
+        );
         // Stability: same hostname → same id
         assert_eq!(id, derive_device_id("my-macbook"));
     }

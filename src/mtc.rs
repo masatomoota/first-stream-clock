@@ -3,6 +3,8 @@
 //! quarter-frame sequences and full-frame SysEx messages into
 //! a [`Timecode`] value that the UI can poll via [`MtcReceiver::status`].
 
+#![cfg_attr(not(feature = "full-sources"), allow(dead_code))]
+
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -310,13 +312,13 @@ mod tests {
     /// Build the 8 quarter-frame data bytes for a given TC and rate code.
     fn qf_bytes(tc: &Timecode, rate_code: u8) -> [u8; 8] {
         [
-            (0 << 4) | (tc.f & 0x0F),          // piece 0: frame LS nibble
-            (1 << 4) | ((tc.f >> 4) & 0x01),   // piece 1: frame MS bit
-            (2 << 4) | (tc.s & 0x0F),           // piece 2: sec LS nibble
-            (3 << 4) | ((tc.s >> 4) & 0x03),    // piece 3: sec MS 2 bits
-            (4 << 4) | (tc.m & 0x0F),           // piece 4: min LS nibble
-            (5 << 4) | ((tc.m >> 4) & 0x03),    // piece 5: min MS 2 bits
-            (6 << 4) | (tc.h & 0x0F),           // piece 6: hour LS nibble
+            (0 << 4) | (tc.f & 0x0F),        // piece 0: frame LS nibble
+            (1 << 4) | ((tc.f >> 4) & 0x01), // piece 1: frame MS bit
+            (2 << 4) | (tc.s & 0x0F),        // piece 2: sec LS nibble
+            (3 << 4) | ((tc.s >> 4) & 0x03), // piece 3: sec MS 2 bits
+            (4 << 4) | (tc.m & 0x0F),        // piece 4: min LS nibble
+            (5 << 4) | ((tc.m >> 4) & 0x03), // piece 5: min MS 2 bits
+            (6 << 4) | (tc.h & 0x0F),        // piece 6: hour LS nibble
             // piece 7: hour MS bit (bit0) + rate code (bits1-2)
             (7 << 4) | (((tc.h >> 4) & 0x01) | ((rate_code & 0x03) << 1)),
         ]
@@ -325,7 +327,12 @@ mod tests {
     #[test]
     fn full_sequence_assembles_with_two_frame_offset() {
         // 01:02:03:04 at 30 fps (rate code 3); after +2 frames => 01:02:03:06
-        let base = Timecode { h: 1, m: 2, s: 3, f: 4 };
+        let base = Timecode {
+            h: 1,
+            m: 2,
+            s: 3,
+            f: 4,
+        };
         let bytes = qf_bytes(&base, 3);
         let mut asm = QfAssembler::new();
 
@@ -338,20 +345,36 @@ mod tests {
         assert_eq!(rate_code, 3);
         let (_, fps_n) = rate_code_to_fps(rate_code);
         let corrected = raw_tc.advanced_by(2, fps_n);
-        assert_eq!(corrected, Timecode { h: 1, m: 2, s: 3, f: 6 });
+        assert_eq!(
+            corrected,
+            Timecode {
+                h: 1,
+                m: 2,
+                s: 3,
+                f: 6
+            }
+        );
     }
 
     #[test]
     fn mid_sequence_start_does_not_assemble_early() {
         // Feed pieces 4..7, then a full 0..7 run.  The assembler should only
         // emit a result at the end of the second run.
-        let base = Timecode { h: 0, m: 0, s: 0, f: 0 };
+        let base = Timecode {
+            h: 0,
+            m: 0,
+            s: 0,
+            f: 0,
+        };
         let bytes = qf_bytes(&base, 0);
         let mut asm = QfAssembler::new();
 
         // Pieces 4..7: no result expected yet.
         for &b in &bytes[4..8] {
-            assert!(asm.feed(b).is_none(), "should not assemble from a partial sequence");
+            assert!(
+                asm.feed(b).is_none(),
+                "should not assemble from a partial sequence"
+            );
         }
 
         // Full run 0..7: piece 0 resets state, so we get a result at piece 7.
@@ -359,7 +382,10 @@ mod tests {
         for &b in &bytes[0..8] {
             result = asm.feed(b);
         }
-        assert!(result.is_some(), "should assemble after a complete 0..7 run");
+        assert!(
+            result.is_some(),
+            "should assemble after a complete 0..7 run"
+        );
     }
 
     #[test]
@@ -369,7 +395,15 @@ mod tests {
         let msg: &[u8] = &[0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x42, 10, 30, 15, 0xF7];
         let (tc, rate_code) = parse_full_frame(msg).expect("should parse valid full-frame SysEx");
         assert_eq!(rate_code, 2);
-        assert_eq!(tc, Timecode { h: 2, m: 10, s: 30, f: 15 });
+        assert_eq!(
+            tc,
+            Timecode {
+                h: 2,
+                m: 10,
+                s: 30,
+                f: 15
+            }
+        );
     }
 
     #[test]
