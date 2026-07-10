@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Mac App Store entitlements for the NTP + System (sandbox-safe) build.
-     Build with: cargo build --release --no-default-features
-     Sign with:  codesign --sign "Apple Distribution: ..." --entitlements macos/StreamClock.entitlements
-     See first-stream-clock-mobile/HANDOFF-APPSTORE.md §6 for the full flow. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>com.apple.security.app-sandbox</key>
-    <true/>
-    <key>com.apple.security.network.client</key>
-    <true/>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.application-identifier</key>
+	<string>HS63RU33N9.net.firstcallmusic.streamclock</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>HS63RU33N9</string>
 </dict>
 </plist>

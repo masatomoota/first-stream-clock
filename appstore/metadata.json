@@ -1,0 +1,60 @@
+{
+  "_comment": "App Store Connect metadata for StreamClock (macOS). Consumed by appstore/asc/push_metadata.py.",
+  "appId": "6789441630",
+  "bundleId": "net.firstcallmusic.streamclock",
+  "sku": "streamclock",
+  "teamId": "HS63RU33N9",
+  "platform": "MAC_OS",
+  "versionString": "1.0.0",
+  "copyright": "© 2026 masatomo ota",
+  "contentRightsDeclaration": "USES_THIRD_PARTY_CONTENT",
+  "primaryCategory": "UTILITIES",
+  "secondaryCategory": "PHOTO_AND_VIDEO",
+  "privacyPolicyUrl": "https://masatomoota.github.io/first-stream-clock/privacy.html",
+  "_locale_note": "ja only, on purpose. The en-US app name 'StreamClock' is already registered by a different Apple developer account (ENTITY_ERROR...DUPLICATE.DIFFERENT_ACCOUNT), and ASC refuses to create ANY en-US localization while the name conflicts. User decision 2026-07-10: ship Japanese-only rather than rename. To add English later, pick a free en-US name (e.g. 'StreamClock TC') and re-add the en-US blocks below.",
+  "appInfoLocalizations": {
+    "ja": {
+      "name": "StreamClock",
+      "subtitle": "配信用の時計とタイムコード出力",
+      "privacyPolicyUrl": "https://masatomoota.github.io/first-stream-clock/privacy.html"
+    }
+  },
+  "versionLocalizations": {
+    "ja": {
+      "description": "StreamClock は、配信・収録・ライブ現場のための黒背景オーバーレイ時計です。常に最前面に表示でき、ストップウォッチと、時刻の外部同期、そしてタイムコード出力を備えています。\n\n■ 時刻ソース\n・システム時計\n・NTP サーバー同期（ntp.nict.jp などを指定可能）\n\n■ タイムコード出力\n・LTC（SMPTE リニアタイムコード）を、選んだオーディオ出力デバイスから音声として送出\n・MTC（MIDI タイムコード）を、選んだ MIDI 出力ポートから送出\n・フレームレートは 23.976 / 24 / 25 / 29.97DF / 29.97 / 30 から選択\n・LTC は出力レベル（dBFS）を調整可能\n・両方を同時に出力可能。アプリが表示している時刻がそのまま出力されます\n\n■ 表示\n・時刻、日付、ストップウォッチ、フレーム表示のオン／オフ\n・文字色の変更、7セグメント風フォント\n・背景の透過度、最前面固定、タイムゾーン指定\n\n■ プライバシー\nデータの収集・送信は一切行いません。NTP 同期を有効にした場合のみ、指定した時刻サーバーへ問い合わせます。\n\n埋め込みフォント DSEG7 Classic（© 2017 keshikan, SIL Open Font License 1.1）を使用しています。",
+      "keywords": "時計,タイムコード,LTC,MTC,SMPTE,配信,オーバーレイ,NTP,ストップウォッチ,MIDI",
+      "supportUrl": "https://github.com/masatomoota/first-stream-clock",
+      "marketingUrl": "https://github.com/masatomoota/first-stream-clock",
+      "whatsNew": null,
+      "promotionalText": "アプリが掴んでいる時刻を、LTC（オーディオ）と MTC（MIDI）で同時に送出できます。"
+    }
+  },
+  "ageRating": {
+    "alcoholTobaccoOrDrugUseOrReferences": "NONE",
+    "contests": "NONE",
+    "gamblingSimulated": "NONE",
+    "medicalOrTreatmentInformation": "NONE",
+    "profanityOrCrudeHumor": "NONE",
+    "sexualContentGraphicAndNudity": "NONE",
+    "sexualContentOrNudity": "NONE",
+    "horrorOrFearThemes": "NONE",
+    "matureOrSuggestiveThemes": "NONE",
+    "unrestrictedWebAccess": false,
+    "gambling": false,
+    "violenceCartoonOrFantasy": "NONE",
+    "violenceRealisticProlongedGraphicOrSadistic": "NONE",
+    "violenceRealistic": "NONE"
+  },
+  "screenshots": {
+    "displayType": "APP_DESKTOP",
+    "acceptedSizes": [
+      "1280x800",
+      "1440x900",
+      "2560x1600",
+      "2880x1800"
+    ],
+    "targetSize": "2880x1800",
+    "dir": "appstore/screenshots/mac"
+  },
+  "_reviewDetails": "moved to appstore/review-contact.json, which is gitignored: it carries a personal phone number and this repository is public. push_metadata.py merges it back in."
+}
