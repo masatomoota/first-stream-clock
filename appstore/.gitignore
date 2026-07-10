@@ -1,0 +1,6 @@
+build/
+profiles/
+asc/__pycache__/
+asc/credentials.env
+review-contact.json
+screenshots/tmp/
