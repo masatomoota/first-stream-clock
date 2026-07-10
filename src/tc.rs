@@ -1,5 +1,9 @@
 //! SMPTE timecode representation shared by the MTC and LTC receivers.
 
+// In the appstore build (no full-sources) this module is compiled but never
+// referenced by mtc/ltc (which are cfg'd out).  Suppress the dead-code noise.
+#![cfg_attr(not(feature = "full-sources"), allow(dead_code))]
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timecode {
     pub h: u8,
