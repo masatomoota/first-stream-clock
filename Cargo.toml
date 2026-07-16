@@ -28,6 +28,16 @@ opt-level = 3
 lto = true
 strip = true
 
+# Mac App Store compliance (App Review Guideline 2.5.1 — no non-public APIs).
+# Upstream winit's macOS backend references the private CoreGraphics Services
+# symbols _CGSSetWindowBackgroundBlurRadius / _CGSMainConnectionID (in
+# WindowDelegate::set_blur). App Review flags those undefined imports even
+# though StreamClock never enables window blur, so we build against a vendored
+# copy of winit 0.30.13 with that dead path neutralized. Behavior-neutral for
+# this app. Full rationale + exact diff: third_party/winit/PATCH.md.
+[patch.crates-io]
+winit = { path = "third_party/winit" }
+
 # macOS .app bundling (cargo-bundle). Used for the Mac App Store build, which MUST be
 # built with `--no-default-features --features tc-out` (NTP + System sources, LTC/MTC output).
 # Full build/signing/.pkg flow: see first-stream-clock-mobile/HANDOFF-APPSTORE.md §6.

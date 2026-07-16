@@ -163,6 +163,12 @@ struct Settings {
     /// Show the 4th status line row (off by default).
     #[serde(default)]
     show_status: bool,
+    /// Converter mode: hide the clock face (date/time/stopwatch) and run purely
+    /// as a time-source → LTC/MTC converter, showing only the outgoing timecode
+    /// and the source/output status line. Off by default. Timecode output keeps
+    /// running regardless — this only changes what the window paints.
+    #[serde(default)]
+    hide_clock: bool,
     /// Show the date row (on by default).
     #[serde(default = "default_true")]
     show_date: bool,
@@ -211,6 +217,7 @@ impl Default for Settings {
             font_style: FontStyle::Modern,
             show_frames_sw: false,
             show_status: false,
+            hide_clock: false,
             show_date: true,
             tz_offset_minutes: 540,
             minimize_on_close: false,
@@ -1200,18 +1207,28 @@ impl eframe::App for App {
                 let sz_time = 92.0 * s * time_scale * seg_scale;
                 let sz_sw = 70.0 * s * seg_scale;
                 let sz_status = 12.0 * s;
+                // Converter mode (hide_clock): a compact outgoing-timecode readout
+                // plus a slightly larger status line.
+                let sz_conv = 48.0 * s * seg_scale;
+                let sz_status_conv = 15.0 * s;
 
                 // Estimate total block height (no exact measure without layout pass,
                 // use the font sizes as proxy — monospace line height ≈ font size * 1.2)
                 let line_gap = 4.0 * s;
-                // Time + stopwatch always present; date/status rows are optional.
-                let mut total_h = sz_time * 1.2 + line_gap + sz_sw * 1.2;
-                if self.settings.show_date {
-                    total_h += sz_date * 1.2 + line_gap;
-                }
-                if self.settings.show_status {
-                    total_h += line_gap + sz_status * 1.2;
-                }
+                let total_h = if self.settings.hide_clock {
+                    // Converter mode: outgoing timecode + status line only.
+                    sz_conv * 1.2 + line_gap + sz_status_conv * 1.2
+                } else {
+                    // Time + stopwatch always present; date/status rows are optional.
+                    let mut h = sz_time * 1.2 + line_gap + sz_sw * 1.2;
+                    if self.settings.show_date {
+                        h += sz_date * 1.2 + line_gap;
+                    }
+                    if self.settings.show_status {
+                        h += line_gap + sz_status * 1.2;
+                    }
+                    h
+                };
                 let top_pad = ((avail.y - total_h) / 2.0).max(0.0);
 
                 // Full-window drag/interact target (behind text)
@@ -1314,60 +1331,24 @@ impl eframe::App for App {
                 // ── Clock rows (vertically centered) ──
                 ui.add_space(top_pad);
 
-                // Row 1: Date (toggleable; on by default)
-                if self.settings.show_date {
+                if self.settings.hide_clock {
+                    // ── Converter mode ─────────────────────────────────────
+                    // No clock face. Show only the outgoing timecode and the
+                    // source/output status line, so the app runs as a compact
+                    // time-source → LTC/MTC converter monitor. Output itself is
+                    // driven elsewhere and keeps running regardless.
                     ui.horizontal(|ui| {
                         ui.with_layout(
                             egui::Layout::centered_and_justified(egui::Direction::TopDown),
                             |ui| {
                                 ui.label(
-                                    RichText::new(&date_str)
-                                        .font(FontId::new(sz_date, clock_family.clone()))
-                                        .color(col_bright),
+                                    RichText::new(&time_str)
+                                        .font(FontId::new(sz_conv, clock_family.clone()))
+                                        .color(time_color),
                                 );
                             },
                         );
                     });
-                    ui.add_space(line_gap);
-                }
-
-                // Row 2: Time
-                ui.horizontal(|ui| {
-                    ui.with_layout(
-                        egui::Layout::centered_and_justified(egui::Direction::TopDown),
-                        |ui| {
-                            ui.label(
-                                RichText::new(&time_str)
-                                    .font(FontId::new(sz_time, clock_family.clone()))
-                                    .color(time_color),
-                            );
-                        },
-                    );
-                });
-
-                ui.add_space(line_gap);
-
-                // Row 3: Stopwatch (clickable for double-click cycling)
-                ui.horizontal(|ui| {
-                    ui.with_layout(
-                        egui::Layout::centered_and_justified(egui::Direction::TopDown),
-                        |ui| {
-                            let sw_label = Label::new(
-                                RichText::new(&sw_str)
-                                    .font(FontId::new(sz_sw, clock_family.clone()))
-                                    .color(sw_color),
-                            )
-                            .sense(Sense::click());
-                            let sw_response = ui.add(sw_label);
-                            if sw_response.double_clicked() {
-                                self.stopwatch.cycle(sw_secs);
-                            }
-                        },
-                    );
-                });
-
-                // Row 4: Status line (hidden by default; toggle in Settings)
-                if self.settings.show_status {
                     ui.add_space(line_gap);
                     ui.horizontal(|ui| {
                         ui.with_layout(
@@ -1375,12 +1356,81 @@ impl eframe::App for App {
                             |ui| {
                                 ui.label(
                                     RichText::new(&status_str)
-                                        .font(FontId::monospace(sz_status))
+                                        .font(FontId::monospace(sz_status_conv))
                                         .color(status_color),
                                 );
                             },
                         );
                     });
+                } else {
+                    // Row 1: Date (toggleable; on by default)
+                    if self.settings.show_date {
+                        ui.horizontal(|ui| {
+                            ui.with_layout(
+                                egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                                |ui| {
+                                    ui.label(
+                                        RichText::new(&date_str)
+                                            .font(FontId::new(sz_date, clock_family.clone()))
+                                            .color(col_bright),
+                                    );
+                                },
+                            );
+                        });
+                        ui.add_space(line_gap);
+                    }
+
+                    // Row 2: Time
+                    ui.horizontal(|ui| {
+                        ui.with_layout(
+                            egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                            |ui| {
+                                ui.label(
+                                    RichText::new(&time_str)
+                                        .font(FontId::new(sz_time, clock_family.clone()))
+                                        .color(time_color),
+                                );
+                            },
+                        );
+                    });
+
+                    ui.add_space(line_gap);
+
+                    // Row 3: Stopwatch (clickable for double-click cycling)
+                    ui.horizontal(|ui| {
+                        ui.with_layout(
+                            egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                            |ui| {
+                                let sw_label = Label::new(
+                                    RichText::new(&sw_str)
+                                        .font(FontId::new(sz_sw, clock_family.clone()))
+                                        .color(sw_color),
+                                )
+                                .sense(Sense::click());
+                                let sw_response = ui.add(sw_label);
+                                if sw_response.double_clicked() {
+                                    self.stopwatch.cycle(sw_secs);
+                                }
+                            },
+                        );
+                    });
+
+                    // Row 4: Status line (hidden by default; toggle in Settings)
+                    if self.settings.show_status {
+                        ui.add_space(line_gap);
+                        ui.horizontal(|ui| {
+                            ui.with_layout(
+                                egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                                |ui| {
+                                    ui.label(
+                                        RichText::new(&status_str)
+                                            .font(FontId::monospace(sz_status))
+                                            .color(status_color),
+                                    );
+                                },
+                            );
+                        });
+                    }
                 }
 
                 // ── Resize grip (bottom-right corner) ──────────────────────
@@ -2008,6 +2058,15 @@ impl eframe::App for App {
                     ui.checkbox(&mut self.settings.show_frames, "Show frames on clock (HH:MM:SS:FF)");
                     ui.checkbox(&mut self.settings.show_frames_sw, "Show frames on stopwatch");
                     ui.checkbox(&mut self.settings.show_status, "Show status line (4th row)");
+                    ui.checkbox(
+                        &mut self.settings.hide_clock,
+                        "Converter mode (hide clock, LTC/MTC out only)",
+                    )
+                    .on_hover_text(
+                        "Hide the clock face and run as a time-source → LTC/MTC \
+                         converter, showing only the outgoing timecode and status. \
+                         Timecode output keeps running.",
+                    );
 
                     // Time zone (UTC offset in hours; +9 = JST, the default)
                     ui.horizontal(|ui| {

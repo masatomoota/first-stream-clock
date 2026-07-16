@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StreamClock — サポート / Support</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width: 44rem; margin: 3rem auto; padding: 0 1.25rem;
+         font: 16px/1.75 -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", sans-serif; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.2rem; margin-top: 2.5rem; border-bottom: 1px solid #8884; padding-bottom: .3rem; }
+  h3 { font-size: 1.02rem; margin-top: 1.6rem; }
+  hr { margin: 3rem 0; border: 0; border-top: 1px solid #8884; }
+  code { background: #8882; padding: .1em .35em; border-radius: 3px; }
+  .contact { background: #8881; border: 1px solid #8884; border-radius: 8px; padding: 1rem 1.25rem; margin-top: 1rem; }
+  footer { margin-top: 3rem; font-size: .875rem; opacity: .7; }
+  ul { padding-left: 1.25rem; }
+</style>
+</head>
+<body>
+
+<h1>StreamClock — サポート</h1>
+<p>最終更新: 2026年7月16日</p>
+
+<p>StreamClock は、配信・収録・ライブ現場のための黒背景オーバーレイ時計です。常に最前面に表示でき、
+ストップウォッチ、時刻の外部同期（システム時計／NTP）、そして
+<strong>タイムコード出力（LTC＝オーディオ、MTC＝MIDI）</strong>を備えています。</p>
+
+<h2>お問い合わせ</h2>
+<p>ご質問・不具合のご報告・ご要望は、下記メールアドレスまでご連絡ください。日本語・英語に対応しています。
+通常 2〜3 営業日以内に返信します。</p>
+<div class="contact">
+  <p style="margin:.2em 0"><strong>サポート窓口:</strong>
+     <a href="mailto:info@firstcall.plus?subject=StreamClock%20Support">info@firstcall.plus</a></p>
+  <p style="margin:.2em 0">お問い合わせの際は、macOS のバージョンと、可能であれば発生手順をお知らせいただけると解決が早くなります。</p>
+</div>
+
+<h2>よくある質問</h2>
+
+<h3>時刻がずれています／NTP で同期したい</h3>
+<p>設定画面で時刻ソースを <strong>NTP</strong> に切り替えると、指定した時刻サーバー（既定値
+<code>ntp.nict.jp</code>）と同期します。ネットワークに接続できない環境では <strong>システム時計</strong> を
+お使いください。NTP を無効にしている間、本アプリはネットワーク通信を一切行いません。</p>
+
+<h3>LTC / MTC のタイムコードを出力したい</h3>
+<p>設定画面の <strong>Timecode Output</strong> セクションで、</p>
+<ul>
+  <li><strong>LTC（SMPTE リニアタイムコード）</strong>: 出力先のオーディオデバイスと出力レベル（dBFS）を選択します。</li>
+  <li><strong>MTC（MIDI タイムコード）</strong>: 出力先の MIDI ポートを選択します。</li>
+</ul>
+<p>フレームレートは 23.976 / 24 / 25 / 29.97DF / 29.97 / 30 から選べ、LTC・MTC で共通です。
+アプリが表示している時刻がそのまま出力されます。</p>
+
+<h3>音が大きすぎる／スピーカーからノイズが出る</h3>
+<p>LTC はタイムコード信号（音声）です。出力レベルの既定は控えめですが、モニター用スピーカーではなく、
+タイムコードを受け取る機器へ接続してからご利用ください。</p>
+
+<h3>ウィンドウが最前面に固定できない／枠を消したい</h3>
+<p>設定で「最前面に固定」「背景の透過度」「枠（装飾）の表示」を切り替えられます。</p>
+
+<h3>設定はどこに保存されますか</h3>
+<p>表示色・時刻ソース・選択したデバイス名などの設定は、お使いの Mac 内のアプリ専用領域にのみ保存されます。
+外部へ送信されることはありません。</p>
+
+<h2>動作環境</h2>
+<p>macOS 11 (Big Sur) 以降。Apple シリコン／Intel の両方に対応（ユニバーサルバイナリ）。</p>
+
+<h2>関連リンク</h2>
+<ul>
+  <li>プライバシーポリシー: <a href="https://masatomoota.github.io/first-stream-clock/privacy.html">privacy.html</a></li>
+</ul>
+
+<hr>
+
+<h1>StreamClock — Support</h1>
+<p>Last updated: 16 July 2026</p>
+
+<p>StreamClock is a black-background overlay clock for streaming, recording and live production.
+It stays on top of other windows and offers a stopwatch, external time sync (system clock / NTP),
+and <strong>timecode output (LTC over audio, MTC over MIDI)</strong>.</p>
+
+<h2>Contact</h2>
+<p>For questions, bug reports or feature requests, email us below (Japanese or English).
+We usually reply within 2–3 business days.</p>
+<div class="contact">
+  <p style="margin:.2em 0"><strong>Support:</strong>
+     <a href="mailto:info@firstcall.plus?subject=StreamClock%20Support">info@firstcall.plus</a></p>
+  <p style="margin:.2em 0">Please include your macOS version and, if possible, steps to reproduce the issue.</p>
+</div>
+
+<h2>FAQ</h2>
+
+<h3>The time is off / I want to sync via NTP</h3>
+<p>In Settings, set the time source to <strong>NTP</strong> to sync with the server you specify
+(default <code>ntp.nict.jp</code>). Use the <strong>system clock</strong> when offline. While NTP is
+disabled the app performs no network communication at all.</p>
+
+<h3>How do I output LTC / MTC timecode?</h3>
+<p>In the <strong>Timecode Output</strong> section of Settings:</p>
+<ul>
+  <li><strong>LTC (SMPTE Linear Timecode)</strong>: choose the output audio device and output level (dBFS).</li>
+  <li><strong>MTC (MIDI Time Code)</strong>: choose the output MIDI port.</li>
+</ul>
+<p>Frame rate can be 23.976 / 24 / 25 / 29.97DF / 29.97 / 30 (shared by LTC and MTC). The app outputs
+exactly the time it is displaying.</p>
+
+<h3>The audio is too loud / noisy on my speakers</h3>
+<p>LTC is a timecode audio signal. Connect the output to the device receiving timecode rather than to
+monitor speakers.</p>
+
+<h3>Where are my settings stored?</h3>
+<p>Preferences (colour, time source, selected device names, etc.) are stored only in the app's private
+container on your Mac and are never transmitted.</p>
+
+<h2>Requirements</h2>
+<p>macOS 11 (Big Sur) or later. Universal binary (Apple silicon and Intel).</p>
+
+<h2>Links</h2>
+<ul>
+  <li>Privacy Policy: <a href="https://masatomoota.github.io/first-stream-clock/privacy.html">privacy.html</a></li>
+</ul>
+
+<footer>
+  StreamClock is open source:
+  <a href="https://github.com/masatomoota/first-stream-clock">github.com/masatomoota/first-stream-clock</a>
+</footer>
+
+</body>
+</html>
