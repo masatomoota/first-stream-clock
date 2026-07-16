@@ -21,9 +21,9 @@
   },
   "versionLocalizations": {
     "ja": {
-      "description": "StreamClock は、配信・収録・ライブ現場のための黒背景オーバーレイ時計です。常に最前面に表示でき、ストップウォッチと、時刻の外部同期、そしてタイムコード出力を備えています。\n\n■ 時刻ソース\n・システム時計\n・NTP サーバー同期（ntp.nict.jp などを指定可能）\n\n■ タイムコード出力\n・LTC（SMPTE リニアタイムコード）を、選んだオーディオ出力デバイスから音声として送出\n・MTC（MIDI タイムコード）を、選んだ MIDI 出力ポートから送出\n・フレームレートは 23.976 / 24 / 25 / 29.97DF / 29.97 / 30 から選択\n・LTC は出力レベル（dBFS）を調整可能\n・両方を同時に出力可能。アプリが表示している時刻がそのまま出力されます\n\n■ 表示\n・時刻、日付、ストップウォッチ、フレーム表示のオン／オフ\n・文字色の変更、7セグメント風フォント\n・背景の透過度、最前面固定、タイムゾーン指定\n\n■ プライバシー\nデータの収集・送信は一切行いません。NTP 同期を有効にした場合のみ、指定した時刻サーバーへ問い合わせます。\n\n埋め込みフォント DSEG7 Classic（© 2017 keshikan, SIL Open Font License 1.1）を使用しています。",
+      "description": "StreamClock は、配信・収録・ライブ現場のための黒背景オーバーレイ時計です。常に最前面に表示でき、ストップウォッチと、時刻の外部同期、そしてタイムコード出力を備えています。\n\n■ 時刻ソース\n・システム時計\n・NTP サーバー同期（ntp.nict.jp などを指定可能）\n\n■ タイムコード出力\n・LTC（SMPTE リニアタイムコード）を、選んだオーディオ出力デバイスから音声として送出\n・MTC（MIDI タイムコード）を、選んだ MIDI 出力ポートから送出\n・フレームレートは 23.976 / 24 / 25 / 29.97DF / 29.97 / 30 から選択\n・LTC は出力レベル（dBFS）を調整可能\n・両方を同時に出力可能。アプリが表示している時刻がそのまま出力されます\n・時計表示を隠して、時刻ソース→LTC/MTC の変換専用（コンバーター）ツールとしても動作\n\n■ 表示\n・時刻、日付、ストップウォッチ、フレーム表示のオン／オフ\n・文字色の変更、7セグメント風フォント\n・背景の透過度、最前面固定、タイムゾーン指定\n\n■ プライバシー\nデータの収集・送信は一切行いません。NTP 同期を有効にした場合のみ、指定した時刻サーバーへ問い合わせます。\n\n埋め込みフォント DSEG7 Classic（© 2017 keshikan, SIL Open Font License 1.1）を使用しています。",
       "keywords": "時計,タイムコード,LTC,MTC,SMPTE,配信,オーバーレイ,NTP,ストップウォッチ,MIDI",
-      "supportUrl": "https://github.com/masatomoota/first-stream-clock",
+      "supportUrl": "https://masatomoota.github.io/first-stream-clock/support.html",
       "marketingUrl": "https://github.com/masatomoota/first-stream-clock",
       "whatsNew": null,
       "promotionalText": "アプリが掴んでいる時刻を、LTC（オーディオ）と MTC（MIDI）で同時に送出できます。"
