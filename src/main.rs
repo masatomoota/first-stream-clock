@@ -449,7 +449,18 @@ impl App {
             .unwrap_or_default();
 
         // Force dark theme so settings panel is always readable
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        let mut visuals = egui::Visuals::dark();
+        // The settings window's chrome -- title text, collapse arrow, close X and
+        // the frame border -- is painted from the *global* style, outside the
+        // `Window::show` body where the per-widget overrides live, so egui's dark
+        // defaults (gray 140 title, gray 180 icons, gray 60 border) survive there
+        // and are hard to read against the near-black window fill.
+        visuals.widgets.noninteractive.fg_stroke.color = Color32::from_gray(235);
+        visuals.widgets.inactive.fg_stroke.color = Color32::from_gray(225);
+        visuals.widgets.hovered.fg_stroke.color = Color32::WHITE;
+        visuals.widgets.active.fg_stroke.color = Color32::WHITE;
+        visuals.window_stroke = egui::Stroke::new(1.0, Color32::from_gray(110));
+        cc.egui_ctx.set_visuals(visuals);
 
         // Register DSEG7 Classic Bold for the 7-segment font style, plus a
         // best-effort system CJK fallback so Japanese device names render.
@@ -793,23 +804,34 @@ impl eframe::App for App {
         }
 
         // ── Keyboard input ──────────────────────────────────────────────────
-        ctx.input(|i| {
-            if i.key_pressed(Key::Escape) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            if i.key_pressed(Key::ArrowUp) {
-                self.settings.bg_alpha = (self.settings.bg_alpha + 0.05).min(1.0);
-            }
-            if i.key_pressed(Key::ArrowDown) {
-                self.settings.bg_alpha = (self.settings.bg_alpha - 0.05).max(0.0);
-            }
-            // Mouse wheel (egui 0.34: raw_scroll_delta removed; use smooth_scroll_delta)
-            let scroll = i.smooth_scroll_delta.y;
-            if scroll != 0.0 {
-                let sign = scroll.signum();
-                self.settings.bg_alpha = (self.settings.bg_alpha + 0.05 * sign).clamp(0.0, 1.0);
-            }
+        // `Context::input` holds the Context write lock for the whole closure,
+        // so calling `ctx.send_viewport_cmd` from inside it re-locks the same
+        // Context and deadlocks the UI thread — the window stops responding and
+        // Windows reports "not responding" (release builds have no deadlock
+        // detector). Read the input state first, let the lock go, then send.
+        let (esc_pressed, up_pressed, down_pressed, scroll) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::Escape),
+                i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::ArrowDown),
+                // Mouse wheel (egui 0.34: raw_scroll_delta removed; use smooth_scroll_delta)
+                i.smooth_scroll_delta.y,
+            )
         });
+
+        if esc_pressed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if up_pressed {
+            self.settings.bg_alpha = (self.settings.bg_alpha + 0.05).min(1.0);
+        }
+        if down_pressed {
+            self.settings.bg_alpha = (self.settings.bg_alpha - 0.05).max(0.0);
+        }
+        if scroll != 0.0 {
+            let sign = scroll.signum();
+            self.settings.bg_alpha = (self.settings.bg_alpha + 0.05 * sign).clamp(0.0, 1.0);
+        }
 
         #[cfg(feature = "tc-out")]
         self.update_timecode_targets();
@@ -2175,6 +2197,16 @@ impl eframe::App for App {
                         &mut self.settings.minimize_on_close,
                         "Minimize to taskbar on close (don't exit)",
                     );
+
+                    ui.separator();
+
+                    // Quit the app from here as well as from the right-click menu.
+                    // Uses the same force-exit path so it is not swallowed by the
+                    // minimize-on-close interception in `logic`.
+                    if ui.button("Quit StreamClock").clicked() {
+                        self.force_exit = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 });
             self.settings_open = open;
         } else {
