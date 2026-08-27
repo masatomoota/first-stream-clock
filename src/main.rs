@@ -449,7 +449,18 @@ impl App {
             .unwrap_or_default();
 
         // Force dark theme so settings panel is always readable
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        let mut visuals = egui::Visuals::dark();
+        // The settings window's chrome -- title text, collapse arrow, close X and
+        // the frame border -- is painted from the *global* style, outside the
+        // `Window::show` body where the per-widget overrides live, so egui's dark
+        // defaults (gray 140 title, gray 180 icons, gray 60 border) survive there
+        // and are hard to read against the near-black window fill.
+        visuals.widgets.noninteractive.fg_stroke.color = Color32::from_gray(235);
+        visuals.widgets.inactive.fg_stroke.color = Color32::from_gray(225);
+        visuals.widgets.hovered.fg_stroke.color = Color32::WHITE;
+        visuals.widgets.active.fg_stroke.color = Color32::WHITE;
+        visuals.window_stroke = egui::Stroke::new(1.0, Color32::from_gray(110));
+        cc.egui_ctx.set_visuals(visuals);
 
         // Register DSEG7 Classic Bold for the 7-segment font style, plus a
         // best-effort system CJK fallback so Japanese device names render.
@@ -2186,6 +2197,16 @@ impl eframe::App for App {
                         &mut self.settings.minimize_on_close,
                         "Minimize to taskbar on close (don't exit)",
                     );
+
+                    ui.separator();
+
+                    // Quit the app from here as well as from the right-click menu.
+                    // Uses the same force-exit path so it is not swallowed by the
+                    // minimize-on-close interception in `logic`.
+                    if ui.button("Quit StreamClock").clicked() {
+                        self.force_exit = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 });
             self.settings_open = open;
         } else {
