@@ -793,23 +793,34 @@ impl eframe::App for App {
         }
 
         // ── Keyboard input ──────────────────────────────────────────────────
-        ctx.input(|i| {
-            if i.key_pressed(Key::Escape) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            if i.key_pressed(Key::ArrowUp) {
-                self.settings.bg_alpha = (self.settings.bg_alpha + 0.05).min(1.0);
-            }
-            if i.key_pressed(Key::ArrowDown) {
-                self.settings.bg_alpha = (self.settings.bg_alpha - 0.05).max(0.0);
-            }
-            // Mouse wheel (egui 0.34: raw_scroll_delta removed; use smooth_scroll_delta)
-            let scroll = i.smooth_scroll_delta.y;
-            if scroll != 0.0 {
-                let sign = scroll.signum();
-                self.settings.bg_alpha = (self.settings.bg_alpha + 0.05 * sign).clamp(0.0, 1.0);
-            }
+        // `Context::input` holds the Context write lock for the whole closure,
+        // so calling `ctx.send_viewport_cmd` from inside it re-locks the same
+        // Context and deadlocks the UI thread — the window stops responding and
+        // Windows reports "not responding" (release builds have no deadlock
+        // detector). Read the input state first, let the lock go, then send.
+        let (esc_pressed, up_pressed, down_pressed, scroll) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::Escape),
+                i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::ArrowDown),
+                // Mouse wheel (egui 0.34: raw_scroll_delta removed; use smooth_scroll_delta)
+                i.smooth_scroll_delta.y,
+            )
         });
+
+        if esc_pressed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if up_pressed {
+            self.settings.bg_alpha = (self.settings.bg_alpha + 0.05).min(1.0);
+        }
+        if down_pressed {
+            self.settings.bg_alpha = (self.settings.bg_alpha - 0.05).max(0.0);
+        }
+        if scroll != 0.0 {
+            let sign = scroll.signum();
+            self.settings.bg_alpha = (self.settings.bg_alpha + 0.05 * sign).clamp(0.0, 1.0);
+        }
 
         #[cfg(feature = "tc-out")]
         self.update_timecode_targets();
