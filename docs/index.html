@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StreamClock — 配信用の時計とタイムコード出力 / Clock &amp; Timecode for streaming</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width: 44rem; margin: 3rem auto; padding: 0 1.25rem;
+         font: 16px/1.75 -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", sans-serif; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.2rem; margin-top: 2.5rem; border-bottom: 1px solid #8884; padding-bottom: .3rem; }
+  h3 { font-size: 1.02rem; margin-top: 1.6rem; }
+  hr { margin: 3rem 0; border: 0; border-top: 1px solid #8884; }
+  code { background: #8882; padding: .1em .35em; border-radius: 3px; }
+  .contact { background: #8881; border: 1px solid #8884; border-radius: 8px; padding: 1rem 1.25rem; margin-top: 1rem; }
+  footer { margin-top: 3rem; font-size: .875rem; opacity: .7; }
+  ul { padding-left: 1.25rem; }
+</style>
+</head>
+<body>
+
+<h1>StreamClock</h1>
+<p>最終更新: 2026年9月5日</p>
+
+<p>StreamClock は、配信・収録・ライブ現場のための黒背景オーバーレイ時計です。常に最前面に表示でき、
+ストップウォッチ、時刻の外部同期（システム時計／NTP）、タイムコード出力（LTC＝オーディオ、MTC＝MIDI）を備えています。</p>
+
+<h2>主な機能</h2>
+<ul>
+  <li>時刻ソース（システム時計 / NTP）</li>
+  <li>LTC（SMPTE リニアタイムコード）をオーディオ出力から送出</li>
+  <li>MTC（MIDI タイムコード）を MIDI ポートから送出</li>
+  <li>フレームレート 23.976 / 24 / 25 / 29.97DF / 29.97 / 30</li>
+  <li>ストップウォッチ</li>
+  <li>最前面固定・背景透過・文字色変更</li>
+  <li>時計を隠して時刻ソース→LTC/MTC のコンバーターとしても動作</li>
+</ul>
+
+<h2>料金</h2>
+<div class="contact">
+  <p style="margin:.2em 0">StreamClock は<strong>無料</strong>です。App 内課金・サブスクリプションはありません。
+     購入手続きが不要なため、解約の手続きも必要ありません。iOS/macOS の「サブスクリプション」一覧にも表示されません。</p>
+  <p style="margin:.2em 0">万一、身に覚えのない請求についてご不明な点がある場合は、Apple がご購入・返金の窓口です:
+     <a href="https://reportaproblem.apple.com/">reportaproblem.apple.com</a></p>
+</div>
+
+<h2>動作環境</h2>
+<p>macOS 11 (Big Sur) 以降。Apple シリコン／Intel 両対応（ユニバーサルバイナリ）。</p>
+
+<h2>お問い合わせ</h2>
+<div class="contact">
+  <p style="margin:.2em 0"><a href="mailto:info@firstcall.plus?subject=StreamClock%20Support">info@firstcall.plus</a></p>
+  <p style="margin:.2em 0">日本語・英語に対応しています。通常 2〜3 営業日以内に返信します。</p>
+</div>
+
+<h2>リンク</h2>
+<ul>
+  <li><a href="support.html">サポート / FAQ</a></li>
+  <li><a href="privacy.html">プライバシーポリシー</a></li>
+  <li><a href="https://apps.apple.com/jp/app/id6789441630">Mac App Store</a></li>
+</ul>
+
+<hr>
+
+<h1>StreamClock</h1>
+<p>Last updated: 5 September 2026</p>
+
+<p>StreamClock is a black-background overlay clock for streaming, recording and live production.
+It can stay on top of other windows and includes a stopwatch, external time sync (system clock / NTP),
+and timecode output (LTC over audio, MTC over MIDI).</p>
+
+<h2>Main features</h2>
+<ul>
+  <li>Time sources (system clock / NTP)</li>
+  <li>LTC (SMPTE Linear Timecode) output over audio</li>
+  <li>MTC (MIDI Time Code) output through a MIDI port</li>
+  <li>Frame rates: 23.976 / 24 / 25 / 29.97DF / 29.97 / 30</li>
+  <li>Stopwatch</li>
+  <li>Always on top, transparent background and customisable text colour</li>
+  <li>Can also hide the clock and operate as a time-source-to-LTC/MTC converter</li>
+</ul>
+
+<h2>Pricing</h2>
+<div class="contact">
+  <p style="margin:.2em 0">StreamClock is <strong>free</strong>. There are no in-app purchases or subscriptions.
+     No purchase is required, so there is nothing to cancel. It does not appear in the iOS/macOS “Subscriptions” list.</p>
+  <p style="margin:.2em 0">If you have questions about an unrecognised charge, Apple handles purchases and refunds:
+     <a href="https://reportaproblem.apple.com/">reportaproblem.apple.com</a></p>
+</div>
+
+<h2>Requirements</h2>
+<p>macOS 11 (Big Sur) or later. Universal binary for Apple silicon and Intel.</p>
+
+<h2>Contact</h2>
+<div class="contact">
+  <p style="margin:.2em 0"><a href="mailto:info@firstcall.plus?subject=StreamClock%20Support">info@firstcall.plus</a></p>
+  <p style="margin:.2em 0">Support is available in Japanese and English. We usually reply within 2–3 business days.</p>
+</div>
+
+<h2>Links</h2>
+<ul>
+  <li><a href="support.html">Support / FAQ</a></li>
+  <li><a href="privacy.html">Privacy Policy</a></li>
+  <li><a href="https://apps.apple.com/app/id6789441630">Mac App Store</a></li>
+</ul>
+
+<footer>
+  StreamClock is open source:
+  <a href="https://github.com/masatomoota/first-stream-clock">github.com/masatomoota/first-stream-clock</a>
+</footer>
+
+</body>
+</html>
