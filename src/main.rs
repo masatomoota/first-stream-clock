@@ -23,6 +23,32 @@ use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 use tc::TcRate;
 
+// ── Support links ────────────────────────────────────────────────────────────
+// Published from `docs/` via GitHub Pages; these are the same URLs registered as
+// the App Store "Support" and "Privacy Policy" links for app id 6789441630.
+//
+// Why these live in the app at all: StreamClock's only in-app contact route used
+// to be "none", so a user who wanted help had to search the web for the
+// developer and mail a personal address. Surfacing the official channel here is
+// the fix. Opening a URL goes through egui -> webbrowser -> LaunchServices
+// (LSOpenFromURLSpec), which is permitted under the App Sandbox with no extra
+// entitlement — no subprocess is spawned. Verified on the signed MAS build.
+const SUPPORT_URL: &str = "https://masatomoota.github.io/first-stream-clock/support.html";
+const PRIVACY_URL: &str = "https://masatomoota.github.io/first-stream-clock/privacy.html";
+const SUPPORT_EMAIL: &str = "info@firstcall.plus";
+const SUPPORT_MAILTO: &str = "mailto:info@firstcall.plus?subject=StreamClock%20Support";
+
+/// One-line statement of the billing model, shown in Settings.
+///
+/// StreamClock is free and ships no in-app purchase, subscription or trial, so
+/// there is nothing for a user to cancel and it never appears in the App Store
+/// "Subscriptions" list. Saying so explicitly prevents the "am I being charged?"
+/// support question that the absence of any in-app contact route used to turn
+/// into mail to a personal address.
+fn billing_status_text() -> &'static str {
+    "StreamClock is free — no in-app purchases, no subscription, nothing to cancel."
+}
+
 // ── NIC helpers ──────────────────────────────────────────────────────────────
 
 /// Return (interface_name, IPv4 address) for all non-loopback IPv4 interfaces.
@@ -319,6 +345,50 @@ impl Stopwatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The billing line is the thing a worried user reads before deciding
+    /// whether to go hunting for a way to cancel, so pin its meaning: it must
+    /// say the app is free AND that there is nothing to cancel. Stating only
+    /// "free" is what leaves users unsure whether a charge is coming.
+    #[test]
+    fn billing_text_states_free_and_nothing_to_cancel() {
+        let t = billing_status_text();
+        assert!(t.contains("free"), "must say the app is free: {t:?}");
+        assert!(
+            t.contains("nothing to cancel"),
+            "must say there is nothing to cancel: {t:?}"
+        );
+        assert!(
+            t.contains("no subscription"),
+            "must rule out a subscription: {t:?}"
+        );
+    }
+
+    /// Support links must point at the published GitHub Pages docs (the same
+    /// URLs registered with App Store Connect) over HTTPS, and the only contact
+    /// address the app may expose is the shared support mailbox — never a
+    /// personal one.
+    #[test]
+    fn support_links_are_https_and_use_the_shared_mailbox() {
+        for url in [SUPPORT_URL, PRIVACY_URL] {
+            assert!(
+                url.starts_with("https://masatomoota.github.io/first-stream-clock/"),
+                "unexpected support URL: {url:?}"
+            );
+        }
+        assert_eq!(SUPPORT_EMAIL, "info@firstcall.plus");
+        assert!(
+            SUPPORT_MAILTO.starts_with(&format!("mailto:{SUPPORT_EMAIL}")),
+            "mailto must target the shared mailbox: {SUPPORT_MAILTO:?}"
+        );
+        // Guard against a personal address ever being reintroduced here.
+        for s in [SUPPORT_EMAIL, SUPPORT_MAILTO, SUPPORT_URL, PRIVACY_URL] {
+            assert!(
+                !s.contains("masatomo@"),
+                "personal address must never appear in a public-facing string: {s:?}"
+            );
+        }
+    }
 
     #[test]
     fn aligned_zero_before_first_flip() {
@@ -1574,6 +1644,11 @@ impl eframe::App for App {
             egui::Window::new("Settings")
                 .open(&mut open)
                 .resizable(true)
+                // The panel is a long single column and the app window defaults to
+                // 480x320, so the lower rows (Quit, and now Help & Support) could sit
+                // below the viewport with no way to reach them. egui windows are
+                // clamped to the viewport and do not scroll by default.
+                .vscroll(true)
                 // Feature C: explicit near-black frame so panel is readable regardless of OS theme
                 .frame(
                     egui::Frame::window(&ctx.global_style())
@@ -2197,6 +2272,37 @@ impl eframe::App for App {
                         &mut self.settings.minimize_on_close,
                         "Minimize to taskbar on close (don't exit)",
                     );
+
+                    ui.separator();
+
+                    // ── Help & Support ──────────────────────────────────────
+                    // The app had no in-app contact route, so users looking for
+                    // help had to find the developer themselves. Surface the
+                    // official channel, and state the billing model outright so
+                    // "will I be charged / how do I cancel?" never becomes a
+                    // support mail in the first place.
+                    ui.heading("Help & Support");
+                    ui.label(billing_status_text());
+                    ui.horizontal(|ui| {
+                        if ui.button("Support & FAQ").clicked() {
+                            ctx.open_url(egui::OpenUrl::new_tab(SUPPORT_URL));
+                        }
+                        if ui.button("Privacy Policy").clicked() {
+                            ctx.open_url(egui::OpenUrl::new_tab(PRIVACY_URL));
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Email support").clicked() {
+                            ctx.open_url(egui::OpenUrl::new_tab(SUPPORT_MAILTO));
+                        }
+                        // A mail client may not be configured; let the user take
+                        // the address with them either way.
+                        if ui.button("Copy address").clicked() {
+                            ctx.copy_text(SUPPORT_EMAIL.to_string());
+                        }
+                        ui.label(SUPPORT_EMAIL);
+                    });
+                    ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
 
                     ui.separator();
 
