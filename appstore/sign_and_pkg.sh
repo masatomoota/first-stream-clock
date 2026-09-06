@@ -63,6 +63,17 @@ cp "$PROFILE_PATH" "$APP/Contents/embedded.provisionprofile"
 echo "==> lipo -archs (must be universal)"
 lipo -archs "$APP/Contents/MacOS/stream-clock"
 
+# Everything that will be sealed must be world-readable. This repo lives on an external
+# APFS volume mounted `noowners`, where files can end up mode 700; `cp -R` carries that
+# into the bundle (seen on Contents/Resources/AppIcon.icns, and on the provisioning
+# profile copied in just above). App Store validation rejects such a package with error
+# 90255 -- "includes files that are only readable by the root user" -- because a non-root
+# user could not read them to verify the code signature at launch.
+# This must run AFTER the profile is embedded and BEFORE codesign.
+echo "==> chmod go+rX (App Store validation 90255)"
+chmod -R go+rX "$APP"
+find "$APP" -type f ! -perm -o+r -print | while read -r f; do echo "!! still unreadable: $f" >&2; done
+
 echo "==> codesign (Apple Distribution + sandbox entitlements)"
 codesign --force --sign "$SIGN_IDENTITY" \
   --entitlements "$ENTITLEMENTS" \

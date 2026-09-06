@@ -1,6 +1,6 @@
 [package]
 name = "stream-clock"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Digital clock overlay with stopwatch, synced time sources, and LTC/MTC timecode output"
 license = "MIT"

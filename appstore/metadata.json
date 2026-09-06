@@ -5,7 +5,7 @@
   "sku": "streamclock",
   "teamId": "HS63RU33N9",
   "platform": "MAC_OS",
-  "versionString": "1.0.0",
+  "versionString": "1.0.1",
   "copyright": "© 2026 masatomo ota",
   "contentRightsDeclaration": "USES_THIRD_PARTY_CONTENT",
   "primaryCategory": "UTILITIES",
@@ -25,7 +25,7 @@
       "keywords": "時計,タイムコード,LTC,MTC,SMPTE,配信,オーバーレイ,NTP,ストップウォッチ,MIDI",
       "supportUrl": "https://masatomoota.github.io/first-stream-clock/support.html",
       "marketingUrl": "https://github.com/masatomoota/first-stream-clock",
-      "whatsNew": null,
+      "whatsNew": "・設定画面に「Help & Support」を追加しました。サポート/FAQ とプライバシーポリシーをアプリから直接開けます。お問い合わせ先（info@firstcall.plus）もその場でコピーできます。\n・StreamClock は無料で、App 内課金・サブスクリプションはありません。その旨を設定画面に明記しました。\n・設定画面が縦に長い場合にスクロールできるようにしました。小さいウィンドウでも下部の項目に到達できます。",
       "promotionalText": "アプリが掴んでいる時刻を、LTC（オーディオ）と MTC（MIDI）で同時に送出できます。"
     }
   },
