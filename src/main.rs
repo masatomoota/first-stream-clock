@@ -1641,14 +1641,28 @@ impl eframe::App for App {
             };
 
             let mut open = self.settings_open;
+            // Keep the panel inside the app window. It is a long single column and the
+            // app viewport defaults to 480x320, so without a cap egui sizes the window
+            // to its content, the bottom runs past the viewport edge, and the last rows
+            // (Quit StreamClock) get clipped with no way to reach them — `vscroll` alone
+            // does NOT fix that, because it only scrolls the content *within* whatever
+            // height the window already took. Shipped 1.0.1 had exactly that bug.
+            //
+            // `max_height` bounds the CONTENT area; the window frame adds its own outer
+            // margin on top. Measured on macOS with the default style at a 480x320
+            // viewport, by instrumenting the window's response.rect against
+            // ctx.screen_rect(): subtracting 40 -> 328px tall, 48 -> 320 (exactly flush),
+            // 56 -> 312. So 56 keeps the panel ~8px clear of the bottom edge at the
+            // smallest window size. On taller windows the natural content height
+            // (~334px) is under the cap and this has no effect.
+            // Re-read every frame so it follows live window resizes.
+            let settings_max_h = (ctx.screen_rect().height() - 56.0).max(160.0);
+
             egui::Window::new("Settings")
                 .open(&mut open)
                 .resizable(true)
-                // The panel is a long single column and the app window defaults to
-                // 480x320, so the lower rows (Quit, and now Help & Support) could sit
-                // below the viewport with no way to reach them. egui windows are
-                // clamped to the viewport and do not scroll by default.
                 .vscroll(true)
+                .max_height(settings_max_h)
                 // Feature C: explicit near-black frame so panel is readable regardless of OS theme
                 .frame(
                     egui::Frame::window(&ctx.global_style())
