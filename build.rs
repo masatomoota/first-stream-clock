@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-changed=assets/icon/app.ico");
     #[cfg(windows)]
     {
         let mut res = winresource::WindowsResource::new();
