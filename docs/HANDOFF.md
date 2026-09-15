@@ -17,5 +17,7 @@
 - このマシンの `%LOCALAPPDATA%/Programs/StreamClock/StreamClock.exe` と隣の `app.ico` を更新済み。インストール後のSHA256がビルド成果物・ICO原本と一致することを確認。
 - 旧実行ファイルとICOは `%LOCALAPPDATA%/StreamClock/backups/20260915-092903/` に退避。
 - インストールした実行ファイルを起動し、プロセスの稼働・応答とウィンドウ生成を確認。
+- タスクバーが白いとの報告後、実行ファイルから抽出した32pxアイコンと実行中ウィンドウの20/40pxアイコンが正常なオレンジ色であることを確認。インストール済みEXEもビルド成果物と一致。
+- ローカルのスタートメニューショートカットは、EXE内リソース参照から `%LOCALAPPDATA%/Programs/StreamClock/streamclock-orange-3bb557c.ico,0` へ変更。元のICOを別名でコピーし、Shell変更通知と `ie4uinit.exe -show` でアイコン再読み込みを要求した。タスクバーの最終表示はユーザー側での確認待ち。
 - macOSのバンドルは Cargo.toml が更新済み `AppIcon.icns` を参照する。Windows環境ではmacOSビルド・Dock表示・App Store検証は未実施。Mac側で `./deploy.sh build` と確認が必要。
 - バージョンは1.0.2のまま。今回のGit pushはソース更新であり、GitHub ReleaseやApp Storeへの公開は含まない。
