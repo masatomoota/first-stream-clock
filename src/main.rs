@@ -454,6 +454,42 @@ mod tests {
         }
         // None is acceptable in CI without networking.
     }
+
+    fn wheel(unit: egui::MouseWheelUnit, y: f32, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(0.0, y),
+            modifiers,
+            phase: egui::TouchPhase::Move,
+        }
+    }
+
+    /// One wheel notch must be one opacity step no matter how the frame loop or a mouse
+    /// utility slices it. The old code stepped once per frame while egui's smoothed delta
+    /// was non-zero, so a single notch moved the background ~50-65 %.
+    #[test]
+    fn wheel_notches_counts_events_not_frames() {
+        use egui::{Modifiers, MouseWheelUnit::*};
+        let none = Modifiers::NONE;
+
+        assert_eq!(wheel_notches(&[], 40.0), 0.0);
+        // Windows: one notch down = one -1.0 line event.
+        assert_eq!(wheel_notches(&[wheel(Line, -1.0, none)], 40.0), -1.0);
+        // A burst (as OpenLogi re-sends it) sums to its true size, direction included.
+        let burst = [
+            wheel(Line, -1.0, none),
+            wheel(Line, -2.0, none),
+            wheel(Line, 1.0, none),
+        ];
+        assert_eq!(wheel_notches(&burst, 40.0), -2.0);
+        // Trackpad points use egui's points-per-line, so 40 pt = one notch.
+        assert_eq!(wheel_notches(&[wheel(Point, 20.0, none), wheel(Point, 20.0, none)], 40.0), 1.0);
+        // Ctrl/Cmd + wheel is the zoom gesture, not an opacity change.
+        assert_eq!(wheel_notches(&[wheel(Line, 1.0, Modifiers::CTRL)], 40.0), 0.0);
+        assert_eq!(wheel_notches(&[wheel(Line, 1.0, Modifiers::COMMAND)], 40.0), 0.0);
+        // Other events are ignored.
+        assert_eq!(wheel_notches(&[egui::Event::PointerGone], 40.0), 0.0);
+    }
 }
 
 // ── App ─────────────────────────────────────────────────────────────────────
@@ -509,6 +545,9 @@ struct App {
     ntp_nic_selected: String,
     #[cfg(feature = "full-sources")]
     ptp_nic_selected: String,
+
+    // Mouse-wheel travel not yet turned into a background-opacity step (see `wheel_notches`).
+    wheel_notch_accum: f32,
 }
 
 impl App {
@@ -674,6 +713,7 @@ impl App {
             ntp_nic_selected,
             #[cfg(feature = "full-sources")]
             ptp_nic_selected,
+            wheel_notch_accum: 0.0,
         }
     }
 
@@ -852,6 +892,36 @@ const RED_SIG: Color32 = Color32::from_rgb(0xFF, 0x55, 0x44);
 
 // ── eframe::App ──────────────────────────────────────────────────────────────
 
+/// Mouse-wheel input of this frame, in wheel notches (+ = wheel up / away from you).
+///
+/// Counted from the raw `MouseWheel` events, NOT from `InputState::smooth_scroll_delta`:
+/// egui spreads one notch over ~10 frames there, so stepping "whenever the delta is
+/// non-zero" moved the background 5 % per *frame* — one notch swung it 50-65 %, and a
+/// mouse utility that re-sends each notch as a burst of events (OpenLogi) threw it from
+/// one end to the other and back. Measured on Windows 11, 2026-11-27.
+///
+/// Ctrl/Cmd + wheel is egui's zoom gesture and is left alone (the old code never saw it
+/// either, because egui routes it to `zoom_delta` instead of the scroll delta).
+fn wheel_notches(events: &[egui::Event], points_per_line: f32) -> f32 {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } if !(modifiers.command || modifiers.ctrl) => Some(match unit {
+                // Windows / Linux wheels: winit reports 1.0 per notch (WHEEL_DELTA).
+                egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => delta.y,
+                // Trackpads and macOS: egui's own points-per-line, so it feels the same.
+                egui::MouseWheelUnit::Point => delta.y / points_per_line,
+            }),
+            _ => None,
+        })
+        .sum()
+}
+
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, &self.settings);
@@ -879,13 +949,14 @@ impl eframe::App for App {
         // Context and deadlocks the UI thread — the window stops responding and
         // Windows reports "not responding" (release builds have no deadlock
         // detector). Read the input state first, let the lock go, then send.
-        let (esc_pressed, up_pressed, down_pressed, scroll) = ctx.input(|i| {
+        // Read before `ctx.input` (re-locking the Context inside it deadlocks, see above).
+        let points_per_line = ctx.options(|o| o.input_options.line_scroll_speed).max(1.0);
+        let (esc_pressed, up_pressed, down_pressed, notches) = ctx.input(|i| {
             (
                 i.key_pressed(Key::Escape),
                 i.key_pressed(Key::ArrowUp),
                 i.key_pressed(Key::ArrowDown),
-                // Mouse wheel (egui 0.34: raw_scroll_delta removed; use smooth_scroll_delta)
-                i.smooth_scroll_delta.y,
+                wheel_notches(&i.events, points_per_line),
             )
         });
 
@@ -898,9 +969,15 @@ impl eframe::App for App {
         if down_pressed {
             self.settings.bg_alpha = (self.settings.bg_alpha - 0.05).max(0.0);
         }
-        if scroll != 0.0 {
-            let sign = scroll.signum();
-            self.settings.bg_alpha = (self.settings.bg_alpha + 0.05 * sign).clamp(0.0, 1.0);
+        if notches != 0.0 {
+            // One notch = one 5 % step, the same as one ↑/↓ press. Fractions
+            // (trackpads, high-resolution wheels) carry over to the next frame.
+            self.wheel_notch_accum += notches;
+            let steps = self.wheel_notch_accum.trunc();
+            if steps != 0.0 {
+                self.wheel_notch_accum -= steps;
+                self.settings.bg_alpha = (self.settings.bg_alpha + 0.05 * steps).clamp(0.0, 1.0);
+            }
         }
 
         #[cfg(feature = "tc-out")]
@@ -2342,6 +2419,35 @@ impl eframe::App for App {
 
 // ── Entry point ──────────────────────────────────────────────────────────────
 
+/// Renderer setup that lets the black background actually turn see-through on Windows.
+///
+/// `with_transparent(true)` alone is not enough there: wgpu's default pick on Windows is
+/// Vulkan, and both Vulkan and DX12's default HWND swapchain offer only an *opaque*
+/// composite alpha mode, so egui-wgpu silently renders opaque and `bg_alpha` 0 still shows
+/// solid black. Only DX12 presenting through DirectComposition (`DxgiFromVisual`) supports
+/// premultiplied alpha. Measured on Windows 11 against a magenta backdrop, 2026-11-27:
+/// at bg_alpha 0 the default setup stayed 89 % black; DX12 + DirectComposition showed the
+/// backdrop through everything but the clock digits.
+///
+/// `WGPU_BACKEND` / `WGPU_DX12_PRESENTATION_SYSTEM` still override this, as an escape hatch
+/// for a machine without a usable DX12 device.
+#[cfg(windows)]
+fn windows_transparent_wgpu() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew};
+    use eframe::wgpu;
+
+    let mut setup = WgpuSetupCreateNew::without_display_handle();
+    setup.instance_descriptor.backends =
+        wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12);
+    setup.instance_descriptor.backend_options.dx12.presentation_system =
+        wgpu::Dx12SwapchainKind::DxgiFromVisual.with_env();
+
+    WgpuConfiguration {
+        wgpu_setup: WgpuSetup::CreateNew(setup),
+        ..Default::default()
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -2356,6 +2462,8 @@ fn main() -> eframe::Result<()> {
             .with_always_on_top()
             .with_title("StreamClock"),
         persist_window: true,
+        #[cfg(windows)]
+        wgpu_options: windows_transparent_wgpu(),
         ..Default::default()
     };
 
