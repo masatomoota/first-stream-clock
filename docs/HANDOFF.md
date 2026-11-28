@@ -6,9 +6,9 @@
 
 - 主因は描画設定。wgpu の既定（Vulkan、または DX12 の HWND スワップチェーン）は不透明でしか合成されない。Windows では DX12 + DirectComposition（`DxgiFromVisual`）に固定して解決した（`src/main.rs` の `windows_transparent_wgpu()`）。
 - ホイールは 1 ノッチ = 5% に修正した（`wheel_notches()`）。以前は 1 ノッチで 50〜65% 動いていた。
-- ユーザーが実機で確認済み。修正は作業ブランチ `claude/scroll-transparency-bug-d94f2a` に push 済みで、**main 未マージ**。
+- ユーザーが実機で確認済み。修正は [PR #2](https://github.com/masatomoota/first-stream-clock/pull/2) で main にマージ済み（2026-11-28、マージコミット `317a669`）。
 
-**未完了:** main へのマージ、OBS のウィンドウキャプチャでの見え方の確認、App Store 構成と macOS での回帰確認。
+**未完了:** OBS のウィンドウキャプチャでの見え方の確認、App Store 構成と macOS での回帰確認。
 
 ## 2026-10-17: アイコンとショートカットの復旧
 
